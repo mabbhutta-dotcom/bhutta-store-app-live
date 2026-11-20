@@ -654,57 +654,247 @@ export default function App() {
   };
   const removeCartItem = (index) => setCart(cart.filter((_, i) => i !== index));
 
-  const downloadBillPdf = (bill, items, paid, due) => {
-    const doc = new jsPDF();
-    let y = 18;
-    doc.setFontSize(18);
-    doc.text('Bhutta Shoes and Plastic Store', 14, y);
-    y += 10;
-    doc.setFontSize(11);
-    doc.text(`Bill Number: ${bill.id}`, 14, y);
-    y += 7;
-    doc.text(`Date: ${new Date().toLocaleString()}`, 14, y);
-    y += 7;
-    doc.text(`Customer: ${bill.customer_name || '-'}`, 14, y);
-    y += 7;
-    doc.text(`Mobile: ${bill.phone || '-'}`, 14, y);
-    y += 10;
-    doc.text('Item', 14, y);
-    doc.text('Qty', 105, y);
-    doc.text('Rate', 130, y);
-    doc.text('Amount', 165, y);
-    y += 6;
-    doc.line(14, y, 195, y);
-    y += 7;
-    items.forEach((item) => {
-      if (y > 270) {
-        doc.addPage();
-        y = 18;
-      }
-      const itemName = doc.splitTextToSize(item.name, 85);
-      doc.text(itemName, 14, y);
-      doc.text(String(item.quantity), 105, y);
-      doc.text(Number(item.price).toFixed(2), 130, y);
-      doc.text((item.quantity * item.price).toFixed(2), 165, y);
-      y += Math.max(7, itemName.length * 5);
+ 
+const downloadBillPdf = (bill, items, paid, due) => {
+  const doc = new jsPDF();
+  const pageWidth = 210;
+  const navy = [15, 39, 71];
+  const blue = [220, 235, 250];
+  const margin = 14;
+  let y = 15;
+
+  const subtotal = items.reduce(
+    (sum, item) =>
+      sum + Number(item.quantity) * Number(item.price),
+    0
+  );
+
+  const discount = Number(
+    bill.discount ?? bill.discount_amount ?? 0
+  );
+
+  const grandTotal = Number(
+    bill.total ?? subtotal - discount
+  );
+
+  const paidAmount = Number(paid || 0);
+  const remaining = grandTotal - paidAmount;
+
+  const money = (amount) =>
+    `Rs. ${Number(amount).toFixed(2)}`;
+
+  const drawHeader = () => {
+    doc.setFillColor(...navy);
+    doc.rect(0, 0, pageWidth, 49, 'F');
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(19);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Bhutta Shoes & Plastic Store', 105, 12, {
+      align: 'center'
     });
-    y += 5;
-    doc.line(14, y, 195, y);
-    y += 9;
-    doc.setFontSize(12);
-    doc.text(`Total: Rs. ${Number(bill.total).toFixed(2)}`, 14, y);
-    y += 8;
-    doc.text(`Paid: Rs. ${Number(paid).toFixed(2)}`, 14, y);
-    y += 8;
+
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+
+    doc.text('Muhammad Rashid Bhutta', 14, 25);
+    doc.text('Mobile: 03017623456', 14, 32);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('OWNER', 196, 23, { align: 'right' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.text('Muhammad Asif Bhutta', 196, 31, {
+      align: 'right'
+    });
+    doc.text('Muhammad Sajid Bhutta', 196, 38, {
+      align: 'right'
+    });
+
+    doc.setTextColor(0, 0, 0);
+    y = 58;
+  };
+
+  const drawTableHeader = () => {
+    doc.setFillColor(...navy);
+    doc.rect(margin, y, 182, 10, 'F');
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+
+    doc.text('Item Name', 17, y + 7);
+    doc.text('Qty', 112, y + 7);
+    doc.text('Rate', 140, y + 7);
+    doc.text('Total', 190, y + 7, {
+      align: 'right'
+    });
+
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    y += 16;
+  };
+
+  const newPage = () => {
+    doc.addPage();
+    drawHeader();
+    drawTableHeader();
+  };
+
+  drawHeader();
+
+  doc.setFontSize(13);
+  doc.setFont('helvetica', 'bold');
+  doc.text('SALES INVOICE', 105, y, {
+    align: 'center'
+  });
+
+  y += 10;
+
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+
+  doc.text(`Bill Number: ${bill.id}`, 14, y);
+  doc.text(
+    `Date: ${new Date().toLocaleDateString()}`,
+    196,
+    y,
+    { align: 'right' }
+  );
+
+  y += 8;
+
+  doc.text(
+    `Customer: ${bill.customer_name || '-'}`,
+    14,
+    y
+  );
+
+  doc.text(
+    `Mobile: ${bill.phone || '-'}`,
+    196,
+    y,
+    { align: 'right' }
+  );
+
+  y += 10;
+
+  drawTableHeader();
+
+  items.forEach((item) => {
+    const itemName = doc.splitTextToSize(
+      String(item.name || '-'),
+      85
+    );
+
+    const rowHeight = Math.max(9, itemName.length * 5 + 3);
+
+    if (y + rowHeight > 255) {
+      newPage();
+    }
+
+    doc.setFontSize(9);
+    doc.text(itemName, 17, y);
+
+    doc.text(String(item.quantity), 112, y);
+
     doc.text(
-      `Remaining: Rs. ${(Number(bill.total) - Number(paid)).toFixed(2)}`,
-      14,
+      Number(item.price).toFixed(2),
+      140,
       y
     );
-    y += 8;
-    if (due) doc.text(`Due Date: ${due}`, 14, y);
-    doc.save(`Bill-${bill.id}.pdf`);
-  };
+
+    doc.text(
+      (Number(item.quantity) * Number(item.price)).toFixed(2),
+      190,
+      y,
+      { align: 'right' }
+    );
+
+    y += rowHeight;
+
+    doc.setDrawColor(220, 225, 235);
+    doc.line(14, y - 2, 196, y - 2);
+  });
+
+  if (y + 85 > 275) {
+    newPage();
+  }
+
+  y += 7;
+
+  doc.setFillColor(...blue);
+  doc.roundedRect(105, y, 91, 48, 3, 3, 'F');
+
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+
+  doc.text('Subtotal:', 112, y + 9);
+  doc.text(money(subtotal), 190, y + 9, {
+    align: 'right'
+  });
+
+  doc.text('Discount:', 112, y + 18);
+  doc.text(money(discount), 190, y + 18, {
+    align: 'right'
+  });
+
+  doc.setFont('helvetica', 'bold');
+  doc.text('Grand Total:', 112, y + 29);
+  doc.text(money(grandTotal), 190, y + 29, {
+    align: 'right'
+  });
+
+  doc.setFont('helvetica', 'normal');
+  doc.text('Paid:', 112, y + 38);
+  doc.text(money(paidAmount), 190, y + 38, {
+    align: 'right'
+  });
+
+  y += 55;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text(`Remaining: ${money(remaining)}`, 112, y);
+
+  y += 9;
+
+  if (due) {
+    doc.setFontSize(10);
+    doc.text(`Due Date: ${due}`, 112, y);
+    y += 10;
+  }
+
+  y = Math.max(y + 25, 250);
+
+  doc.setDrawColor(...navy);
+  doc.line(18, y, 82, y);
+  doc.line(128, y, 192, y);
+
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+
+  doc.text('Customer Signature', 50, y + 6, {
+    align: 'center'
+  });
+
+  doc.text('Authorized Signature', 160, y + 6, {
+    align: 'center'
+  });
+
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...navy);
+
+  doc.text(
+    'Thank You For Shopping With Us!',
+    105,
+    282,
+    { align: 'center' }
+  );
+
+  doc.save(`Bill-${bill.id}.pdf`);
+};
 
   const saveBill = async () => {
     if (!customerName.trim()) return setMessage('Customer ka naam likhein.');
