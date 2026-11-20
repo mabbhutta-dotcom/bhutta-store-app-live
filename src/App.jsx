@@ -28,7 +28,6 @@ export default function App() {
   const [categoryId, setCategoryId] = useState('');
   const [description, setDescription] = useState('');
   const [productImage, setProductImage] = useState(null);
-  const [showProductForm, setShowProductForm] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] = useState('all');
   const [barcode, setBarcode] = useState('');
@@ -41,7 +40,6 @@ export default function App() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [selectedProduct, setSelectedProduct] = useState('');
-  const [billProductSearch, setBillProductSearch] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [sellingPrice, setSellingPrice] = useState('');
   const [cart, setCart] = useState([]);
@@ -311,29 +309,13 @@ export default function App() {
       return setMessage('Tamam zaroori details fill karein.');
     if (Number(buyPrice) < 0 || Number(stock) < 0)
       return setMessage('Price aur stock negative nahi ho sakte.');
-    let imageUrl = editingId
-      ? products.find((p) => String(p.id) === String(editingId))?.image_url ||
-        null
-      : null;
+    let imageUrl = editingId ? products.find((p) => String(p.id) === String(editingId))?.image_url || null : null;
     if (productImage) {
-      const extension = (
-        productImage.name.split('.').pop() || 'jpg'
-      ).toLowerCase();
-      const filePath = `products/${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2)}.${extension}`;
-      const { error: uploadError } = await supabase.storage
-        .from('product-images')
-        .upload(filePath, productImage, {
-          upsert: true,
-          contentType: productImage.type || 'image/jpeg',
-        });
-      if (uploadError) {
-        setLoading(false);
-        return setMessage('Picture upload nahi hui: ' + uploadError.message);
-      }
-      imageUrl = supabase.storage.from('product-images').getPublicUrl(filePath)
-        .data.publicUrl;
+      const extension = (productImage.name.split('.').pop() || 'jpg').toLowerCase();
+      const filePath = `products/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
+      const { error: uploadError } = await supabase.storage.from('product-images').upload(filePath, productImage, { upsert: true, contentType: productImage.type || 'image/jpeg' });
+      if (uploadError) { setLoading(false); return setMessage('Picture upload nahi hui: ' + uploadError.message); }
+      imageUrl = supabase.storage.from('product-images').getPublicUrl(filePath).data.publicUrl;
     }
     const product = {
       name: name.trim(),
@@ -352,13 +334,11 @@ export default function App() {
     setLoading(false);
     if (result.error) return setMessage(result.error.message);
     clearForm();
-    setShowProductForm(false);
     await loadProducts();
     setMessage('Product save ho gaya!');
   };
 
   const editProduct = (p) => {
-    setShowProductForm(true);
     setEditingId(p.id);
     setName(p.name || '');
     setBuyPrice(String(p.buy_price ?? 0));
@@ -613,7 +593,6 @@ export default function App() {
     setPaidAmount('0');
     setDueDate('');
     setSelectedProduct('');
-    setBillProductSearch('');
     setSellingPrice('');
     setQuantity('1');
     setBarcodeSearch('');
@@ -676,243 +655,55 @@ export default function App() {
   const removeCartItem = (index) => setCart(cart.filter((_, i) => i !== index));
 
   const downloadBillPdf = (bill, items, paid, due) => {
-    // A4 portrait customer invoice styled to match the approved bill template.
-    const doc = new jsPDF({
-      orientation: 'portrait',
-      unit: 'mm',
-      format: 'a4',
-    });
-    const W = 210,
-      H = 297,
-      navy = [5, 35, 83],
-      blue = [42, 119, 207];
-    const pale = [229, 240, 255],
-      yellow = [255, 210, 0],
-      green = [12, 143, 75];
-    const left = 8,
-      right = 202,
-      innerW = right - left;
-    const fmt = (v) =>
-      Number(v || 0).toLocaleString('en-PK', { maximumFractionDigits: 2 });
-    const dateText = new Date().toLocaleDateString('en-GB');
-    const remainingAmount = Math.max(
-      0,
-      Number(bill.total || 0) - Number(paid || 0)
-    );
-    const moneyText = (v) => `PKR ${fmt(v)}`;
-
-    // Outer frame and decorative brand header.
-    doc.setDrawColor(...navy);
-    doc.setLineWidth(1.1);
-    doc.roundedRect(3, 3, 204, 291, 7, 7, 'S');
-    doc.setFillColor(...navy);
-    doc.roundedRect(23, 6, 164, 34, 15, 15, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(23);
-    doc.text('Bhutta Shoes &', 105, 20, { align: 'center' });
-    doc.setTextColor(255, 218, 0);
-    doc.setFontSize(22);
-    doc.text('Plastic Store', 105, 31, { align: 'center' });
-    doc.setTextColor(...navy);
-    doc.setFontSize(12);
-    doc.text('Created by Muhammad Rashid Bhutta', 105, 47, { align: 'center' });
-    doc.setDrawColor(...navy);
-    doc.setLineWidth(0.7);
-    doc.line(18, 45, 42, 45);
-    doc.line(168, 45, 192, 45);
-
-    // Owners' details panels.
-    doc.setFillColor(...pale);
-    doc.setDrawColor(139, 190, 248);
-    doc.roundedRect(7, 52, 96, 25, 3, 3, 'FD');
-    doc.roundedRect(107, 52, 96, 25, 3, 3, 'FD');
-    doc.setTextColor(...navy);
-    doc.setFont('helvetica', 'bold');
+    const doc = new jsPDF();
+    let y = 18;
+    doc.setFontSize(18);
+    doc.text('Bhutta Shoes and Plastic Store', 14, y);
+    y += 10;
     doc.setFontSize(11);
-    doc.text('Muhammad Rashid Bhutta', 55, 62, { align: 'center' });
-    doc.setFontSize(14);
-    doc.text('☎  03017623456', 55, 71, { align: 'center' });
-    doc.setFillColor(...navy);
-    doc.roundedRect(144, 51, 22, 7, 3, 3, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(9);
-    doc.text('Owner', 155, 56, { align: 'center' });
-    doc.setTextColor(...navy);
-    doc.setFontSize(10);
-    doc.text('Muhammad Asif Bhutta', 155, 64, { align: 'center' });
-    doc.text('Muhammad Sajid Bhutta', 155, 72, { align: 'center' });
-
-    // Bill title band.
-    doc.setFillColor(...navy);
-    doc.roundedRect(7, 80, 196, 15, 3, 3, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(20);
-    doc.text('CUSTOMER BILL', 105, 90.5, { align: 'center' });
-
-    // Customer and bill metadata.
-    doc.setFillColor(248, 251, 255);
-    doc.roundedRect(8, 98, 194, 27, 3, 3, 'F');
-    doc.setTextColor(...navy);
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Customer Name:', 13, 108);
-    doc.text('Date:', 13, 119);
-    doc.text('Bill No:', 132, 108);
-    doc.text('Cashier:', 132, 119);
-    doc.setDrawColor(115, 164, 220);
-    doc.setLineWidth(0.5);
-    doc.roundedRect(52, 101, 70, 9, 2, 2, 'S');
-    doc.roundedRect(52, 112, 70, 9, 2, 2, 'S');
-    doc.roundedRect(157, 101, 40, 9, 2, 2, 'S');
-    doc.roundedRect(157, 112, 40, 9, 2, 2, 'S');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.setTextColor(20, 38, 67);
-    doc.text(
-      doc.splitTextToSize(String(bill.customer_name || '-'), 66),
-      55,
-      107.5
-    );
-    doc.text(dateText, 55, 118.5);
-    doc.text(String(bill.id), 161, 107.5);
-    doc.text('Shop Owner', 161, 118.5);
-
-    // Product table with five visible rows minimum, like the supplied sample.
-    const tableX = 8,
-      tableY = 130,
-      tableW = 194,
-      headerH = 14,
-      rowH = 13;
-    const cols = [17, 79, 27, 36, 35];
-    const x = [tableX];
-    for (const width of cols) x.push(x[x.length - 1] + width);
-    doc.setFillColor(...navy);
-    doc.roundedRect(tableX, tableY, tableW, headerH, 3, 3, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    ['#', 'Product', 'Qty', 'Rate (PKR)', 'Total (PKR)'].forEach((label, i) =>
-      doc.text(label, (x[i] + x[i + 1]) / 2, tableY + 9, { align: 'center' })
-    );
-    const visibleRows = Math.max(5, items.length);
-    let rowY = tableY + headerH;
-    doc.setDrawColor(36, 83, 145);
-    doc.setLineWidth(0.35);
-    for (let i = 0; i < visibleRows; i++) {
-      doc.rect(tableX, rowY, tableW, rowH, 'S');
-      for (let c = 1; c < x.length - 1; c++)
-        doc.line(x[c], rowY, x[c], rowY + rowH);
-      if (items[i]) {
-        const item = items[i];
-        doc.setTextColor(15, 28, 45);
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(9.5);
-        doc.text(String(i + 1), (x[0] + x[1]) / 2, rowY + 8.5, {
-          align: 'center',
-        });
-        doc.text(
-          doc.splitTextToSize(String(item.name || ''), 74).slice(0, 1),
-          x[1] + 3,
-          rowY + 8.5
-        );
-        doc.text(String(item.quantity), (x[2] + x[3]) / 2, rowY + 8.5, {
-          align: 'center',
-        });
-        doc.text(fmt(item.price), x[4] - 2, rowY + 8.5, { align: 'right' });
-        doc.text(
-          fmt(Number(item.quantity) * Number(item.price)),
-          x[5] - 2,
-          rowY + 8.5,
-          { align: 'right' }
-        );
-      } else {
-        doc.setTextColor(0, 0, 0);
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(10);
-        doc.text(String(i + 1), (x[0] + x[1]) / 2, rowY + 8.5, {
-          align: 'center',
-        });
+    doc.text(`Bill Number: ${bill.id}`, 14, y);
+    y += 7;
+    doc.text(`Date: ${new Date().toLocaleString()}`, 14, y);
+    y += 7;
+    doc.text(`Customer: ${bill.customer_name || '-'}`, 14, y);
+    y += 7;
+    doc.text(`Mobile: ${bill.phone || '-'}`, 14, y);
+    y += 10;
+    doc.text('Item', 14, y);
+    doc.text('Qty', 105, y);
+    doc.text('Rate', 130, y);
+    doc.text('Amount', 165, y);
+    y += 6;
+    doc.line(14, y, 195, y);
+    y += 7;
+    items.forEach((item) => {
+      if (y > 270) {
+        doc.addPage();
+        y = 18;
       }
-      rowY += rowH;
-    }
-
-    // Payment panel and totals.
-    const panelY = rowY + 5;
-    doc.setFillColor(...pale);
-    doc.setDrawColor(139, 190, 248);
-    doc.roundedRect(8, panelY, 111, 42, 3, 3, 'FD');
-    doc.setFillColor(...navy);
-    doc.roundedRect(11, panelY + 2, 66, 9, 2, 2, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.text('Payment Details:', 15, panelY + 8.5);
-    doc.setTextColor(...navy);
-    doc.setFontSize(11);
-    doc.text('Cash Paid:', 15, panelY + 22);
-    doc.text('Remaining Amount:', 15, panelY + 35);
-    doc.setTextColor(0, 0, 0);
-    doc.setFontSize(13);
-    doc.text(fmt(paid), 112, panelY + 22, { align: 'right' });
-    doc.text(fmt(remainingAmount), 112, panelY + 35, { align: 'right' });
-
-    const totalsX = 124,
-      totalsW = 78;
-    doc.setFillColor(...navy);
-    doc.roundedRect(totalsX, panelY, totalsW, 12, 3, 3, 'F');
-    doc.roundedRect(totalsX, panelY + 14, totalsW, 12, 3, 3, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(10);
-    doc.text('Sub Total:', totalsX + 4, panelY + 8);
-    doc.text(fmt(bill.total), totalsX + totalsW - 4, panelY + 8, {
-      align: 'right',
+      const itemName = doc.splitTextToSize(item.name, 85);
+      doc.text(itemName, 14, y);
+      doc.text(String(item.quantity), 105, y);
+      doc.text(Number(item.price).toFixed(2), 130, y);
+      doc.text((item.quantity * item.price).toFixed(2), 165, y);
+      y += Math.max(7, itemName.length * 5);
     });
-    doc.text('Discount:', totalsX + 4, panelY + 22);
-    doc.text('0', totalsX + totalsW - 4, panelY + 22, { align: 'right' });
-    doc.setFillColor(...yellow);
-    doc.roundedRect(totalsX, panelY + 28, totalsW, 14, 3, 3, 'F');
-    doc.setTextColor(0, 0, 0);
+    y += 5;
+    doc.line(14, y, 195, y);
+    y += 9;
     doc.setFontSize(12);
-    doc.text('Grand Total:', totalsX + 3, panelY + 37);
-    doc.setFontSize(13);
-    doc.text(fmt(bill.total), totalsX + totalsW - 3, panelY + 37, {
-      align: 'right',
-    });
-
-    // Due date (only when there is an outstanding balance).
-    if (due) {
-      doc.setTextColor(...navy);
-      doc.setFontSize(9);
-      doc.text(`Due Date: ${due}`, 12, panelY + 49);
-    }
-
-    // Signature panels and thank-you footer.
-    const footerY = Math.min(265, panelY + 58);
-    doc.setDrawColor(45, 105, 180);
-    doc.roundedRect(8, footerY, 57, 39, 4, 4, 'S');
-    doc.roundedRect(145, footerY, 57, 39, 4, 4, 'S');
-    doc.setDrawColor(...navy);
-    doc.line(12, footerY + 25, 61, footerY + 25);
-    doc.line(149, footerY + 25, 198, footerY + 25);
-    doc.setTextColor(...navy);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.text('Customer Signature', 36.5, footerY + 32, { align: 'center' });
-    doc.text('Authorized Signature', 173.5, footerY + 32, { align: 'center' });
-    doc.setFont('times', 'italic');
-    doc.setFontSize(24);
-    doc.text('Thank You!', 105, footerY + 18, { align: 'center' });
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text('Visit Again!', 105, footerY + 32, { align: 'center' });
-    if (remainingAmount > 0 && due) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.5);
-      doc.text(`Payment due: ${due}`, 105, 289, { align: 'center' });
-    }
-    doc.save(`Bhutta-Store-Bill-${bill.id}.pdf`);
+    doc.text(`Total: Rs. ${Number(bill.total).toFixed(2)}`, 14, y);
+    y += 8;
+    doc.text(`Paid: Rs. ${Number(paid).toFixed(2)}`, 14, y);
+    y += 8;
+    doc.text(
+      `Remaining: Rs. ${(Number(bill.total) - Number(paid)).toFixed(2)}`,
+      14,
+      y
+    );
+    y += 8;
+    if (due) doc.text(`Due Date: ${due}`, 14, y);
+    doc.save(`Bill-${bill.id}.pdf`);
   };
 
   const saveBill = async () => {
@@ -1235,14 +1026,12 @@ export default function App() {
     return (
       <div style={styles.center}>
         <div style={styles.box}>
-          <h2 style={{ color: '#10243A', textAlign: 'center' }}>
-            Bhutta Shoes & Plastic Store
-          </h2>
-          <p
-            style={{ textAlign: 'center', color: '#168B65', fontWeight: '600' }}
-          >
-            Created by Muhammad Rashid Bhutta
-          </p>
+        <h2 style={{ color: '#10243A', textAlign: 'center' }}>
+          Bhutta Shoes & Plastic Store
+         </h2>
+         <p style={{ textAlign: 'center', color: '#168B65', fontWeight: '600' }}>
+         Created by Muhammad Rashid Bhutta
+        </p>
           <h3 style={{ textAlign: 'center' }}>Owner Login</h3>
           <input
             style={styles.input}
@@ -1268,1385 +1057,745 @@ export default function App() {
 
   return (
     <div style={styles.appShell}>
-      <style>{`
-        * { box-sizing: border-box; }
-        body { margin: 0; background: #eef4ff; }
-        .store-frame { min-height:100vh; background:linear-gradient(135deg,#eaf2ff,#f8fbff); color:#09265c; font-family:Inter,Arial,sans-serif; }
-        .store-top { height:58px; background:linear-gradient(90deg,#061b43,#0b3474); color:#fff; display:flex; align-items:center; justify-content:flex-end; gap:18px; padding:0 24px; box-shadow:0 3px 14px #08285b33; }
-        .store-layout { display:grid; grid-template-columns:224px minmax(0,1fr); gap:0; max-width:1600px; min-height:calc(100vh - 58px); margin:auto; padding:0 12px 12px; }
-        .store-side { background:linear-gradient(180deg,#061b43,#0b3474); color:white; padding:18px 10px; border-radius:0 0 14px 14px; box-shadow:0 8px 24px #08285b22; }
-        .store-brand { padding:8px 10px 20px; border-bottom:1px solid #ffffff2b; margin-bottom:14px; }
-        .store-brand-mark { width:44px;height:44px;border-radius:13px;background:#fff;color:#09265c;display:grid;place-items:center;font-size:24px;font-weight:900;margin-bottom:10px; }
-        .store-nav { display:flex;align-items:center;gap:10px;width:100%;border:0;border-radius:9px;padding:11px 10px;margin:3px 0;background:transparent;color:#eaf2ff;text-align:left;font-size:13px;font-weight:650;cursor:pointer; }
-        .store-nav.active { background:linear-gradient(90deg,#1595ff,#0873e7);color:white;box-shadow:0 4px 12px #0084ff55; }
-        .store-main { min-width:0; margin:12px 0 0 12px; background:#f7faff; border:1px solid #d7e5ff; border-radius:15px; padding:22px; box-shadow:0 6px 22px #09265c12; }
-        .store-main h3 { color:#09265c; margin-top:4px; }
-        .store-main h4 { color:#12336c; }
-        .store-main button { border-radius:8px!important; font-weight:700; transition:transform .15s,box-shadow .15s; }
-        .store-main button:hover { transform:translateY(-1px);box-shadow:0 5px 13px #09265c22; }
-        .store-main input,.store-main select { border:1px solid #cbdcf8!important;border-radius:8px!important;background:#fff;min-height:39px;color:#102b5e; }
-        .store-main [style*="border: 1px solid #ddd"], .store-main [style*="border:1px solid #ddd"] { border-color:#d7e5fb!important; background:#fff; border-radius:12px!important; box-shadow:0 3px 12px #12376b0c; }
-        .store-main img { object-fit:contain!important; background:#f0f5ff!important; }
-        .store-main table { border-collapse:collapse; width:100%; }
-        .store-main th { background:#e8f1ff; color:#09265c; }
-        .store-stat { border-radius:12px; padding:16px; border:1px solid #cfe0ff; background:linear-gradient(135deg,#e6f0ff,#fff); box-shadow:0 3px 12px #0a367515; }
-        .store-stat strong { display:block;font-size:24px;color:#09265c;margin-top:7px; }
-        .store-message { color:#0b6d48;font-weight:700; }
-        @media(max-width:850px){.store-layout{grid-template-columns:1fr;padding:0 8px 8px}.store-side{border-radius:0 0 12px 12px;position:static}.store-nav{display:inline-flex;width:auto;margin:3px}.store-brand{display:flex;align-items:center;gap:12px;padding-bottom:10px}.store-brand-mark{margin:0}.store-main{margin:10px 0;padding:14px}.store-top{height:52px}}
-      `}</style>
-      <div className="store-frame">
-        <header className="store-top">
-          <span style={{ color: '#6ee7b7', fontSize: 12, fontWeight: 800 }}>
-            ● SHOP OPEN
-          </span>
-          <span style={{ fontSize: 18 }}>🔔</span>
-          <span
-            style={{
-              background: '#fff',
-              color: '#09265c',
-              borderRadius: 20,
-              padding: '6px 9px',
-              fontWeight: 800,
-              fontSize: 12,
-            }}
-          >
-            RB
-          </span>
-        </header>
-        <div className="store-layout">
-          <aside className="store-side">
-            <div className="store-brand">
-              <div className="store-brand-mark">🛍</div>
-              <div>
-                <b style={{ fontSize: 14, lineHeight: 1.35 }}>
-                  Bhutta Shoes &<br />
-                  Plastic Store
-                </b>
-                <div style={{ fontSize: 9, color: '#c7dcff', marginTop: 4 }}>
-                  Created by Muhammad
-                  <br />
-                  Rashid Bhutta
-                </div>
-              </div>
-            </div>
-            {[
-              ['dashboard', '⌂', 'Dashboard'],
-              ['bill', '▣', 'New Bill'],
-              ['udhar', '🛒', 'Manage Orders'],
-              ['customers', '♙', 'Customers'],
-              ['products', '⬡', 'Products'],
-              ['udhar', '▤', 'Payments'],
-              ['udhar', '◉', 'Udhaar'],
-              ['profits', '▥', 'Reports'],
-              ['expenses', '⚙', 'Expenses'],
-              ['itemRequests', '✚', 'Item Requests'],
-              ['stock', '▦', 'Stock'],
-            ].map(([key, icon, label], index) => (
-              <button
-                key={`${key}-${label}`}
-                className={`store-nav ${
-                  page === key &&
-                  ((label !== 'Payments' && label !== 'Udhaar') ||
-                    page === 'udhar')
-                    ? 'active'
-                    : ''
-                }`}
-                onClick={() => {
-                  setPage(key);
-                  setMessage('');
-                  if (key === 'products') openProducts();
-                  if (key === 'customers') openCustomers();
-                  if (key === 'udhar') openUdhar();
-                  if (key === 'stock') openStock();
-                  if (key === 'expenses') openExpenses();
-                  if (key === 'itemRequests') openItemRequests();
-                  if (key === 'profits') openProfitReports();
-                  if (key === 'bill') openBill();
-                }}
-              >
-                <span style={{ width: 20, fontSize: 16 }}>{icon}</span>
-                {label}
-              </button>
-            ))}
-            <div
-              style={{
-                borderTop: '1px solid #ffffff2b',
-                marginTop: 12,
-                paddingTop: 12,
-              }}
-            >
-              <button
-                className="store-nav"
-                onClick={exportBackup}
-                disabled={loading}
-              >
-                ⬇ Download Backup
-              </button>
-              <label className="store-nav">
-                ↥ Restore Backup
-                <input
-                  key={backupInputKey}
-                  type="file"
-                  accept=".json,application/json"
-                  onChange={importBackup}
-                  style={{ display: 'none' }}
-                />
-              </label>
-              <button
-                className="store-nav"
+      <header style={styles.topHeader}>
+        <div>
+          <h2 style={{ margin: 0, color: '#ffffff' }}>Bhutta Shoes & Plastic Store</h2>
+          <p style={{ margin: '5px 0 0', color: '#bfdbfe', fontSize: 13 }}>Created by Muhammad Rashid Bhutta</p>
+        </div>
+        <button style={styles.headerLogout} onClick={logout}>Logout</button>
+      </header>
+      <div style={styles.appLayout}>
+        <aside style={styles.sidebar}>
+          <div style={styles.sidebarCaption}>STORE MENU</div>
+          {[
+            ['dashboard', 'Dashboard'], ['bill', 'New Bill'], ['products', 'Products'],
+            ['customers', 'Customers'], ['udhar', 'Udhaar'], ['stock', 'Stock'],
+            ['profits', 'Reports'], ['expenses', 'Expenses'], ['itemRequests', 'Item Requests']
+          ].map(([key, label]) => (
+            <button key={key} style={page === key ? styles.navActive : styles.navButton} onClick={() => { setPage(key); setMessage(''); if (key === 'products') openProducts(); if (key === 'customers') openCustomers(); if (key === 'udhar') openUdhar(); if (key === 'stock') openStock(); if (key === 'expenses') openExpenses(); if (key === 'itemRequests') openItemRequests(); if (key === 'profits') openProfitReports(); if (key === 'bill') openBill(); }}>
+              {label}
+            </button>
+          ))}
+          <div style={styles.sidebarCaption}>DATA</div>
+          <button style={styles.navButton} onClick={exportBackup} disabled={loading}>Download Backup</button>
+          <label style={styles.navButton}>Restore Backup<input key={backupInputKey} type="file" accept=".json,application/json" onChange={importBackup} style={{display:'none'}} /></label>
+        </aside>
+        <main style={styles.mainContent}>
+          {page === 'dashboard' && (
+        <>
+          <h3>Owner Dashboard</h3>
+          <div style={styles.statsGrid}>
+            <div style={styles.statCard}><span>Total Products</span><strong>{products.length}</strong></div>
+            <div style={styles.statCard}><span>Total Sales Today</span><strong>{money(todaySales)}</strong></div>
+            <div style={styles.statCard}><span>Customers</span><strong>{customers.length}</strong></div>
+            <div style={styles.statCard}><span>Low Stock Items</span><strong>{lowStockProducts.length}</strong></div>
+          </div>
+          <div style={styles.box}>
+            <h3>Aaj ka Hisab</h3>
+            <p>
+              Daily Sale: <b>{money(todaySales)}</b>
+            </p>
+            <p>
+              Daily Gross Profit: <b>{money(todayProfit)}</b>
+            </p>
+            <p>
+              Daily Expenses: <b>{money(todayExpenses)}</b>
+            </p>
+            <p>
+              Net Profit after expenses:{' '}
+              <b
                 style={{
-                  background: '#ef3340',
-                  marginTop: 12,
-                  justifyContent: 'center',
-                }}
-                onClick={logout}
-              >
-                ⏻ Logout
-              </button>
-            </div>
-          </aside>
-          <main className="store-main">
-            {page === 'dashboard' && (
-              <>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: 10,
-                  }}
-                >
-                  <div>
-                    <h2 style={{ margin: '0 0 4px', color: '#09265c' }}>
-                      ⌂ Dashboard
-                    </h2>
-                    <span style={{ color: '#55709a', fontSize: 13 }}>
-                      Welcome to Bhutta Shoes & Plastic Store
-                    </span>
-                  </div>
-                  <span
-                    style={{
-                      background: '#dcfce7',
-                      color: '#087443',
-                      padding: '7px 12px',
-                      borderRadius: 20,
-                      fontSize: 12,
-                      fontWeight: 800,
-                    }}
-                  >
-                    ● Shop Open
-                  </span>
-                </div>
-                <div style={styles.statsGrid}>
-                  <div className="store-stat">
-                    <span>Total Bills</span>
-                    <strong>{profitRows.length}</strong>
-                    <small>All recorded bills</small>
-                  </div>
-                  <div
-                    className="store-stat"
-                    style={{
-                      background: 'linear-gradient(135deg,#dcfce7,#fff)',
-                      borderColor: '#b7ebcf',
-                    }}
-                  >
-                    <span>Total Sales Today</span>
-                    <strong>{money(todaySales)}</strong>
-                    <small>Today's sales</small>
-                  </div>
-                  <div
-                    className="store-stat"
-                    style={{
-                      background: 'linear-gradient(135deg,#f1eaff,#fff)',
-                      borderColor: '#dfd0ff',
-                    }}
-                  >
-                    <span>Customers</span>
-                    <strong>{customers.length}</strong>
-                    <small>Registered customers</small>
-                  </div>
-                  <div
-                    className="store-stat"
-                    style={{
-                      background: 'linear-gradient(135deg,#fff0df,#fff)',
-                      borderColor: '#ffdbb4',
-                    }}
-                  >
-                    <span>Products</span>
-                    <strong>{products.length}</strong>
-                    <small>Items in inventory</small>
-                  </div>
-                </div>
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'minmax(0,2fr) minmax(220px,1fr)',
-                    gap: 14,
-                    margin: '12px 0',
-                  }}
-                >
-                  <section
-                    style={{
-                      background: '#fff',
-                      border: '1px solid #d9e6fb',
-                      borderRadius: 12,
-                      padding: 14,
-                    }}
-                  >
-                    <h3 style={{ marginTop: 0 }}>⚡ Quick Actions</h3>
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns:
-                          'repeat(auto-fit,minmax(105px,1fr))',
-                        gap: 9,
-                      }}
-                    >
-                      <button
-                        style={{ ...styles.blue, background: '#1769ed' }}
-                        onClick={openBill}
-                      >
-                        ▣<br />
-                        New Bill
-                      </button>
-                      <button
-                        style={{ ...styles.green, background: '#08a77b' }}
-                        onClick={openUdhar}
-                      >
-                        🛒
-                        <br />
-                        Manage Orders
-                      </button>
-                      <button
-                        style={{ ...styles.blue, background: '#7c3aed' }}
-                        onClick={openCustomers}
-                      >
-                        ♙<br />
-                        Add Customer
-                      </button>
-                      <button
-                        style={{ ...styles.blue, background: '#f59e0b' }}
-                        onClick={openProducts}
-                      >
-                        ⬡<br />
-                        Add Product
-                      </button>
-                      <button
-                        style={{ ...styles.blue, background: '#06a6c8' }}
-                        onClick={openUdhar}
-                      >
-                        ▤<br />
-                        Payments
-                      </button>
-                      <button
-                        style={{ ...styles.red, background: '#ef476f' }}
-                        onClick={openUdhar}
-                      >
-                        ◉<br />
-                        Udhaar
-                      </button>
-                    </div>
-                  </section>
-                  <section
-                    style={{
-                      background: '#fff',
-                      border: '1px solid #d9e6fb',
-                      borderRadius: 12,
-                      padding: 14,
-                    }}
-                  >
-                    <h3 style={{ marginTop: 0 }}>Shop Status</h3>
-                    <div
-                      style={{
-                        fontSize: 22,
-                        color: '#07965e',
-                        fontWeight: 900,
-                      }}
-                    >
-                      ✓ Shop Open
-                    </div>
-                    <p style={{ fontSize: 12, color: '#64748b' }}>
-                      All systems working
-                    </p>
-                  </section>
-                </div>
-                <div style={styles.statsGrid}>
-                  <div style={styles.statCard}>
-                    <span>Total Products</span>
-                    <strong>{products.length}</strong>
-                  </div>
-                  <div style={styles.statCard}>
-                    <span>Total Sales Today</span>
-                    <strong>{money(todaySales)}</strong>
-                  </div>
-                  <div style={styles.statCard}>
-                    <span>Customers</span>
-                    <strong>{customers.length}</strong>
-                  </div>
-                  <div style={styles.statCard}>
-                    <span>Low Stock Items</span>
-                    <strong>{lowStockProducts.length}</strong>
-                  </div>
-                </div>
-                <div style={styles.box}>
-                  <h3>Aaj ka Hisab</h3>
-                  <p>
-                    Daily Sale: <b>{money(todaySales)}</b>
-                  </p>
-                  <p>
-                    Daily Gross Profit: <b>{money(todayProfit)}</b>
-                  </p>
-                  <p>
-                    Daily Expenses: <b>{money(todayExpenses)}</b>
-                  </p>
-                  <p>
-                    Net Profit after expenses:{' '}
-                    <b
-                      style={{
-                        color:
-                          todayProfit - todayExpenses >= 0 ? 'green' : 'red',
-                      }}
-                    >
-                      {money(todayProfit - todayExpenses)}
-                    </b>
-                  </p>
-                  <button style={styles.gray} onClick={openDailyReport}>
-                    Daily Report Dekhein
-                  </button>
-                </div>
-                <button style={styles.green} onClick={openProducts}>
-                  Products
-                </button>
-                <button style={styles.gray} onClick={openBill}>
-                  New Bill
-                </button>
-                <button style={styles.gray} onClick={openItemRequests}>
-                  New Item Demand
-                </button>
-                <button style={styles.gray} onClick={openCustomers}>
-                  Customers
-                </button>
-                <button style={styles.gray} onClick={openUdhar}>
-                  Udhar Record
-                </button>
-                <button style={styles.gray} onClick={openStock}>
-                  Stock
-                </button>
-                <button style={styles.gray} onClick={openProfitReports}>
-                  Profit Reports
-                </button>
-                <button style={styles.gray} onClick={openExpenses}>
-                  Expenses Record
-                </button>
-                <button
-                  style={styles.gray}
-                  onClick={exportBackup}
-                  disabled={loading}
-                >
-                  {loading ? 'Please wait...' : 'Download Data Backup'}
-                </button>
-                <label style={styles.uploadLabel}>
-                  Restore Backup (JSON)
-                  <input
-                    key={backupInputKey}
-                    type="file"
-                    accept=".json,application/json"
-                    onChange={importBackup}
-                    style={{ display: 'block', marginTop: 8 }}
-                  />
-                </label>
-                <div style={styles.box}>
-                  <h3>Low Stock Alert ({lowStockProducts.length})</h3>
-                  {lowStockProducts.length === 0 ? (
-                    <p>Sab products ka stock theek hai.</p>
-                  ) : (
-                    lowStockProducts.map((p) => (
-                      <p key={p.id}>
-                        <b>{p.name}</b> —{' '}
-                        {p.stock <= 0 ? 'Out of Stock' : `Sirf ${p.stock} baqi`}
-                      </p>
-                    ))
-                  )}
-                </div>
-                <div style={styles.box}>
-                  <h3>Udhaar Payment Reminders</h3>
-                  <button style={styles.green} onClick={loadDueReminders}>
-                    Refresh Reminders
-                  </button>
-                  {dueReminders.length === 0 ? (
-                    <p>Abhi koi overdue payment nahi hai.</p>
-                  ) : (
-                    dueReminders.map((bill) => (
-                      <div key={bill.id} style={styles.product}>
-                        <b>{bill.customer_name}</b>
-                        <p>Mobile: {bill.phone || '-'}</p>
-                        <p>Bill Number: {bill.id}</p>
-                        <p>Due Date: {bill.due_date}</p>
-                        <b style={{ color: 'red' }}>
-                          Baqi Udhaar: {money(bill.balance)}
-                        </b>
-                        <p style={{ color: 'red' }}>Payment overdue hai!</p>
-                        <button
-                          style={styles.whatsapp}
-                          onClick={() => sendWhatsAppForBill(bill)}
-                        >
-                          WhatsApp Reminder
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <p>{message}</p>
-              </>
-            )}
-
-            {page !== 'dashboard' && (
-              <button
-                style={styles.gray}
-                onClick={() => {
-                  setPage('dashboard');
-                  setMessage('');
-                  setScannerOpen(false);
+                  color: todayProfit - todayExpenses >= 0 ? 'green' : 'red',
                 }}
               >
-                ← Back to Dashboard
-              </button>
+                {money(todayProfit - todayExpenses)}
+              </b>
+            </p>
+            <button style={styles.gray} onClick={openDailyReport}>
+              Daily Report Dekhein
+            </button>
+          </div>
+          <button style={styles.green} onClick={openProducts}>
+            Products
+          </button>
+          <button style={styles.gray} onClick={openBill}>
+            New Bill
+          </button>
+          <button style={styles.gray} onClick={openItemRequests}>
+            New Item Demand
+          </button>
+          <button style={styles.gray} onClick={openCustomers}>
+            Customers
+          </button>
+          <button style={styles.gray} onClick={openUdhar}>
+            Udhar Record
+          </button>
+          <button style={styles.gray} onClick={openStock}>
+            Stock
+          </button>
+          <button style={styles.gray} onClick={openProfitReports}>
+            Profit Reports
+          </button>
+          <button style={styles.gray} onClick={openExpenses}>
+            Expenses Record
+          </button>
+          <button style={styles.gray} onClick={exportBackup} disabled={loading}>
+            {loading ? 'Please wait...' : 'Download Data Backup'}
+          </button>
+          <label style={styles.uploadLabel}>
+            Restore Backup (JSON)
+            <input
+              key={backupInputKey}
+              type="file"
+              accept=".json,application/json"
+              onChange={importBackup}
+              style={{ display: 'block', marginTop: 8 }}
+            />
+          </label>
+          <div style={styles.box}>
+            <h3>Low Stock Alert ({lowStockProducts.length})</h3>
+            {lowStockProducts.length === 0 ? (
+              <p>Sab products ka stock theek hai.</p>
+            ) : (
+              lowStockProducts.map((p) => (
+                <p key={p.id}>
+                  <b>{p.name}</b> —{' '}
+                  {p.stock <= 0 ? 'Out of Stock' : `Sirf ${p.stock} baqi`}
+                </p>
+              ))
             )}
-
-            {page === 'customers' && (
-              <>
-                <h3>Customers List</h3>
-                <button style={styles.green} onClick={loadCustomers}>
-                  Refresh Customers
-                </button>
-                <p>Total Customers: {customers.length}</p>
-                {customers.length === 0 ? (
-                  <p>Abhi koi customer nahi hai.</p>
-                ) : (
-                  customers.map((c) => (
-                    <div key={c.id} style={styles.product}>
-                      <b>{c.name}</b>
-                      <p>Mobile: {c.phone || '-'}</p>
-                      <p>Customer ID: {c.id}</p>
-                      <p>
-                        Added:{' '}
-                        {c.created_at
-                          ? new Date(c.created_at).toLocaleDateString()
-                          : '-'}
-                      </p>
-                    </div>
-                  ))
-                )}
-                <p>{message}</p>
-              </>
-            )}
-
-            {page === 'udhar' && (
-              <>
-                <h3>Udhar Record</h3>
-                <button style={styles.green} onClick={loadUdharRecords}>
-                  Refresh Udhar
-                </button>
-                {!udharBills.length ? (
-                  <p>Kisi customer ka udhaar baqi nahi hai.</p>
-                ) : (
-                  udharBills.map((bill) => (
-                    <div key={bill.id} style={styles.product}>
-                      <b>{bill.customer_name}</b>
-                      <p>Mobile: {bill.phone || '-'}</p>
-                      <p>Bill Number: {bill.id}</p>
-                      <p>Bill Total: {money(bill.total)}</p>
-                      <p>Paid: {money(bill.paid)}</p>
-                      <b style={{ color: 'red' }}>
-                        Remaining: {money(bill.balance)}
-                      </b>
-                      <p>Due Date: {bill.due_date || '-'}</p>
-                      <h4>Payment Jama Karein</h4>
-                      <input
-                        style={styles.input}
-                        type="number"
-                        min="0"
-                        placeholder="Payment Amount"
-                        value={paymentAmounts[bill.id] || ''}
-                        onChange={(e) =>
-                          setPaymentAmounts((old) => ({
-                            ...old,
-                            [bill.id]: e.target.value,
-                          }))
-                        }
-                      />
-                      <select
-                        style={styles.input}
-                        value={paymentMethod}
-                        onChange={(e) => setPaymentMethod(e.target.value)}
-                      >
-                        <option>Cash</option>
-                        <option>Bank</option>
-                        <option>JazzCash</option>
-                        <option>EasyPaisa</option>
-                      </select>
-                      <button
-                        style={styles.green}
-                        disabled={loading}
-                        onClick={() => saveUdharPayment(bill)}
-                      >
-                        {loading ? 'Saving...' : 'Save Payment'}
-                      </button>
-                      <button
-                        style={styles.whatsapp}
-                        onClick={() => whatsappReminder(bill)}
-                      >
-                        WhatsApp Reminder
-                      </button>
-                      {bill.payments.length > 0 && (
-                        <>
-                          <h4>Payment History</h4>
-                          {bill.payments.map((p) => (
-                            <p key={p.id}>
-                              {money(p.amount)} — {p.payment_method || '-'}
-                            </p>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  ))
-                )}
-                <p>{message}</p>
-              </>
-            )}
-
-            {page === 'stock' && (
-              <>
-                <h3>Stock Management</h3>
-                <button style={styles.green} onClick={loadProducts}>
-                  Refresh Stock
-                </button>
-                <p>Total Products: {products.length}</p>
-                {products.map((p) => (
-                  <div key={p.id} style={styles.product}>
-                    <b>{p.name}</b>
-                    <p>Stock Quantity: {p.stock}</p>
-                    {Number(p.stock) <= 0 ? (
-                      <b style={{ color: 'red' }}>Out of Stock</b>
-                    ) : Number(p.stock) <= 5 ? (
-                      <b style={{ color: '#d97706' }}>Low Stock Warning!</b>
-                    ) : (
-                      <b style={{ color: 'green' }}>Stock Available</b>
-                    )}
-                  </div>
-                ))}
-                <p>{message}</p>
-              </>
-            )}
-
-            {(page === 'profits' || page === 'dailyReport') && (
-              <>
-                <h3>
-                  {page === 'profits'
-                    ? 'Profit Reports'
-                    : 'Daily Sale and Profit Report'}
-                </h3>
-                <button
-                  style={styles.green}
-                  onClick={async () => {
-                    await loadProfitReports();
-                    await loadExpenses();
-                  }}
-                >
-                  Refresh Reports
-                </button>
-                <div style={styles.box}>
-                  <h3>
-                    Total Sales:{' '}
-                    {money(profitRows.reduce((s, r) => s + r.sale, 0))}
-                  </h3>
-                  <h3>
-                    Purchase Cost:{' '}
-                    {money(profitRows.reduce((s, r) => s + r.cost, 0))}
-                  </h3>
-                  <h2 style={{ color: 'green' }}>
-                    Gross Profit:{' '}
-                    {money(profitRows.reduce((s, r) => s + r.profit, 0))}
-                  </h2>
-                  <p>Today Sale: {money(todaySales)}</p>
-                  <p>Today Gross Profit: {money(todayProfit)}</p>
-                  <p>Today Expenses: {money(todayExpenses)}</p>
-                  <b>Today Net Profit: {money(todayProfit - todayExpenses)}</b>
-                </div>
-                <h3>
-                  {page === 'dailyReport' ? 'Aaj ke Bills' : 'Bill Wise Profit'}
-                </h3>
-                {(page === 'dailyReport'
-                  ? profitRows.filter((r) => r.date === getToday())
-                  : profitRows
-                ).length === 0 ? (
-                  <p>Is period mein sales record nahi hai.</p>
-                ) : (
-                  (page === 'dailyReport'
-                    ? profitRows.filter((r) => r.date === getToday())
-                    : profitRows
-                  ).map((row) => (
-                    <div key={row.order_id} style={styles.product}>
-                      <b>Bill Number: {row.order_id}</b>
-                      <p>Customer: {row.customer_name || '-'}</p>
-                      <p>
-                        Date:{' '}
-                        {row.created_at
-                          ? new Date(row.created_at).toLocaleString()
-                          : '-'}
-                      </p>
-                      <p>Sale: {money(row.sale)}</p>
-                      <p>Purchase Cost: {money(row.cost)}</p>
-                      <b style={{ color: 'green' }}>
-                        Profit: {money(row.profit)}
-                      </b>
-                    </div>
-                  ))
-                )}
-                <p>{message}</p>
-              </>
-            )}
-
-            {page === 'expenses' && (
-              <>
-                <h3>Expenses Record</h3>
-                <div style={styles.box}>
-                  <input
-                    style={styles.input}
-                    placeholder="Expense ka naam (misal: Kiraya, Bijli)"
-                    value={expenseTitle}
-                    onChange={(e) => setExpenseTitle(e.target.value)}
-                  />
-                  <input
-                    style={styles.input}
-                    type="number"
-                    min="0"
-                    placeholder="Amount (PKR)"
-                    value={expenseAmount}
-                    onChange={(e) => setExpenseAmount(e.target.value)}
-                  />
-                  <select
-                    style={styles.input}
-                    value={expenseCategory}
-                    onChange={(e) => setExpenseCategory(e.target.value)}
-                  >
-                    <option>General</option>
-                    <option>Rent</option>
-                    <option>Electricity</option>
-                    <option>Transport</option>
-                    <option>Salary</option>
-                    <option>Repair</option>
-                    <option>Other</option>
-                  </select>
-                  <input
-                    style={styles.input}
-                    type="date"
-                    value={expenseDate}
-                    onChange={(e) => setExpenseDate(e.target.value)}
-                  />
-                  <textarea
-                    style={styles.input}
-                    placeholder="Note (optional)"
-                    value={expenseNote}
-                    onChange={(e) => setExpenseNote(e.target.value)}
-                  />
+          </div>
+          <div style={styles.box}>
+            <h3>Udhaar Payment Reminders</h3>
+            <button style={styles.green} onClick={loadDueReminders}>
+              Refresh Reminders
+            </button>
+            {dueReminders.length === 0 ? (
+              <p>Abhi koi overdue payment nahi hai.</p>
+            ) : (
+              dueReminders.map((bill) => (
+                <div key={bill.id} style={styles.product}>
+                  <b>{bill.customer_name}</b>
+                  <p>Mobile: {bill.phone || '-'}</p>
+                  <p>Bill Number: {bill.id}</p>
+                  <p>Due Date: {bill.due_date}</p>
+                  <b style={{ color: 'red' }}>
+                    Baqi Udhaar: {money(bill.balance)}
+                  </b>
+                  <p style={{ color: 'red' }}>Payment overdue hai!</p>
                   <button
-                    style={styles.green}
-                    disabled={loading}
-                    onClick={saveExpense}
+                    style={styles.whatsapp}
+                    onClick={() => sendWhatsAppForBill(bill)}
                   >
-                    {loading ? 'Saving...' : 'Save Expense'}
+                    WhatsApp Reminder
                   </button>
                 </div>
-                <h3>Expense History</h3>
-                <button style={styles.gray} onClick={loadExpenses}>
-                  Refresh Expenses
-                </button>
-                <h3>
-                  Total Expenses:{' '}
-                  {money(
-                    expenses.reduce((s, e) => s + Number(e.amount || 0), 0)
-                  )}
-                </h3>
-                {expenses.length === 0 ? (
-                  <p>Abhi koi expense record nahi hai.</p>
-                ) : (
-                  expenses.map((e) => (
-                    <div key={e.id} style={styles.product}>
-                      <b>{e.title}</b>
-                      <p>Amount: {money(e.amount)}</p>
-                      <p>Category: {e.category || '-'}</p>
-                      <p>Date: {e.expense_date || '-'}</p>
-                      <p>Note: {e.note || '-'}</p>
-                      <button
-                        style={styles.red}
-                        onClick={() => deleteExpense(e.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  ))
-                )}
-                <p>{message}</p>
-              </>
+              ))
             )}
+          </div>
+          <p>{message}</p>
+        </>
+      )}
 
-            {page === 'itemRequests' && (
-              <>
-                <h3>New Item Demand</h3>
-                <div style={styles.box}>
-                  <input
-                    style={styles.input}
-                    placeholder="Item ka naam likhein"
-                    value={itemName}
-                    onChange={(e) => setItemName(e.target.value)}
-                  />
-                  <button
-                    style={styles.green}
-                    onClick={saveItemRequest}
-                    disabled={loading}
-                  >
-                    {loading ? 'Saving...' : 'Save Item'}
-                  </button>
-                  <p>{message}</p>
-                </div>
-                <h3>Requested Items</h3>
-                {!itemRequests.length ? (
-                  <p>Abhi koi new item request nahi hai.</p>
-                ) : (
-                  itemRequests.map((item) => (
-                    <div key={item.id} style={styles.product}>
-                      <b>{item.item_name}</b>
-                      <button
-                        style={styles.red}
-                        onClick={() => deleteItemRequest(item.id)}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  ))
-                )}
-              </>
-            )}
+      {page !== 'dashboard' && (
+        <button
+          style={styles.gray}
+          onClick={() => {
+            setPage('dashboard');
+            setMessage('');
+            setScannerOpen(false);
+          }}
+        >
+          ← Back to Dashboard
+        </button>
+      )}
 
-            {page === 'products' && (
-              <>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    gap: 12,
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <h2 style={{ margin: 0 }}>⬡ Products</h2>
-                  <button
-                    style={styles.blue}
-                    onClick={() => {
-                      clearForm();
-                      setShowProductForm(true);
-                    }}
-                  >
-                    ＋ Add Product
-                  </button>
-                </div>
-                <div
-                  style={{
-                    ...styles.statsGrid,
-                    gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))',
-                  }}
-                >
-                  <div className="store-stat">
-                    <span>Total Products</span>
-                    <strong>{products.length}</strong>
-                  </div>
-                  <div
-                    className="store-stat"
-                    style={{
-                      background: 'linear-gradient(135deg,#dcfce7,#fff)',
-                    }}
-                  >
-                    <span>Total Stock Value</span>
-                    <strong>
-                      {money(
-                        products.reduce(
-                          (sum, p) =>
-                            sum +
-                            Number(p.buy_price || 0) * Number(p.stock || 0),
-                          0
-                        )
-                      )}
-                    </strong>
-                  </div>
-                  <div
-                    className="store-stat"
-                    style={{
-                      background: 'linear-gradient(135deg,#f1eaff,#fff)',
-                    }}
-                  >
-                    <span>Best Selling Item</span>
-                    <strong style={{ fontSize: 16 }}>
-                      {profitRows.length ? 'Sales recorded' : '—'}
-                    </strong>
-                  </div>
-                  <div
-                    className="store-stat"
-                    style={{
-                      background: 'linear-gradient(135deg,#fff0df,#fff)',
-                    }}
-                  >
-                    <span>Low Stock Items</span>
-                    <strong>{lowStockProducts.length}</strong>
-                  </div>
-                </div>
-                {showProductForm && (
-                  <div style={styles.box}>
-                    <h3>{editingId ? 'Edit Product' : 'Add New Product'}</h3>
-                    <input
-                      style={styles.input}
-                      placeholder="Product Name"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                    />
-                    <input
-                      style={styles.input}
-                      type="number"
-                      placeholder="Buy Price (PKR)"
-                      value={buyPrice}
-                      onChange={(e) => setBuyPrice(e.target.value)}
-                    />
-                    <input
-                      style={styles.input}
-                      type="number"
-                      placeholder="Stock Quantity"
-                      value={stock}
-                      onChange={(e) => setStock(e.target.value)}
-                    />
-                    <input
-                      style={styles.input}
-                      placeholder="Barcode Number (optional)"
-                      value={barcode}
-                      onChange={(e) => setBarcode(e.target.value)}
-                    />
-                    <select
-                      style={styles.input}
-                      value={categoryId}
-                      onChange={(e) => setCategoryId(e.target.value)}
-                    >
-                      <option value="">Select Category</option>
-                      {categories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      style={styles.input}
-                      placeholder="Description (optional)"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                    />
-                    <label style={styles.uploadLabel}>
-                      Product Picture (Camera / Gallery)
-                      <input
-                        style={{ ...styles.input, marginBottom: 4 }}
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        onChange={(e) =>
-                          setProductImage(e.target.files?.[0] || null)
-                        }
-                      />
-                      {productImage && <small>{productImage.name}</small>}
-                    </label>
-                    <button
-                      style={styles.green}
-                      onClick={saveProduct}
-                      disabled={loading}
-                    >
-                      {loading
-                        ? 'Saving...'
-                        : editingId
-                        ? 'Update Product'
-                        : 'Save Product'}
-                    </button>
-                    {editingId && (
-                      <button style={styles.gray} onClick={clearForm}>
-                        Cancel Edit
-                      </button>
-                    )}
-                    <p>{message}</p>
-                    <button
-                      style={styles.gray}
-                      onClick={() => {
-                        clearForm();
-                        setShowProductForm(false);
-                      }}
-                    >
-                      Close
-                    </button>
-                  </div>
-                )}
-                <div style={styles.sectionHeading}>
-                  <h3 style={{ margin: 0 }}>All Products</h3>
-                  <span>{products.length} items</span>
-                </div>
+      {page === 'customers' && (
+        <>
+          <h3>Customers List</h3>
+          <button style={styles.green} onClick={loadCustomers}>
+            Refresh Customers
+          </button>
+          <p>Total Customers: {customers.length}</p>
+          {customers.length === 0 ? (
+            <p>Abhi koi customer nahi hai.</p>
+          ) : (
+            customers.map((c) => (
+              <div key={c.id} style={styles.product}>
+                <b>{c.name}</b>
+                <p>Mobile: {c.phone || '-'}</p>
+                <p>Customer ID: {c.id}</p>
+                <p>
+                  Added:{' '}
+                  {c.created_at
+                    ? new Date(c.created_at).toLocaleDateString()
+                    : '-'}
+                </p>
+              </div>
+            ))
+          )}
+          <p>{message}</p>
+        </>
+      )}
+
+      {page === 'udhar' && (
+        <>
+          <h3>Udhar Record</h3>
+          <button style={styles.green} onClick={loadUdharRecords}>
+            Refresh Udhar
+          </button>
+          {!udharBills.length ? (
+            <p>Kisi customer ka udhaar baqi nahi hai.</p>
+          ) : (
+            udharBills.map((bill) => (
+              <div key={bill.id} style={styles.product}>
+                <b>{bill.customer_name}</b>
+                <p>Mobile: {bill.phone || '-'}</p>
+                <p>Bill Number: {bill.id}</p>
+                <p>Bill Total: {money(bill.total)}</p>
+                <p>Paid: {money(bill.paid)}</p>
+                <b style={{ color: 'red' }}>Remaining: {money(bill.balance)}</b>
+                <p>Due Date: {bill.due_date || '-'}</p>
+                <h4>Payment Jama Karein</h4>
                 <input
                   style={styles.input}
-                  placeholder="Search product name / barcode..."
-                  value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
+                  type="number"
+                  min="0"
+                  placeholder="Payment Amount"
+                  value={paymentAmounts[bill.id] || ''}
+                  onChange={(e) =>
+                    setPaymentAmounts((old) => ({
+                      ...old,
+                      [bill.id]: e.target.value,
+                    }))
+                  }
                 />
                 <select
                   style={styles.input}
-                  value={productCategoryFilter}
-                  onChange={(e) => setProductCategoryFilter(e.target.value)}
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
                 >
-                  <option value="all">All Categories</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={String(c.id)}>
-                      {c.name}
-                    </option>
-                  ))}
+                  <option>Cash</option>
+                  <option>Bank</option>
+                  <option>JazzCash</option>
+                  <option>EasyPaisa</option>
                 </select>
-                {!products.length && <p>Abhi koi product nahi hai.</p>}
-                <div style={styles.productGrid}>
-                  {products
-                    .filter(
-                      (p) =>
-                        (p.name || '')
-                          .toLowerCase()
-                          .includes(productSearch.toLowerCase()) ||
-                        String(p.barcode || '').includes(productSearch)
-                    )
-                    .filter(
-                      (p) =>
-                        productCategoryFilter === 'all' ||
-                        String(p.category_id) === productCategoryFilter
-                    )
-                    .map((p) => (
-                      <div key={p.id} style={styles.productCard}>
-                        {p.image_url ? (
-                          <img
-                            src={p.image_url}
-                            alt={p.name}
-                            style={styles.productImage}
-                          />
-                        ) : (
-                          <div style={styles.imagePlaceholder}>No Image</div>
-                        )}
-                        <div style={{ padding: 14, minWidth: 0 }}>
-                          <b style={{ fontSize: 16 }}>{p.name}</b>
-                          <p>
-                            Category:{' '}
-                            {categories.find(
-                              (c) => String(c.id) === String(p.category_id)
-                            )?.name || '-'}
-                          </p>
-                          <p>Buy Price: {money(p.buy_price)}</p>
-                          <p>Stock: {p.stock}</p>
-                          <p>Barcode: {p.barcode || '-'}</p>
-                          {Number(p.stock) <= 0 ? (
-                            <b style={{ color: 'red' }}>Out of Stock</b>
-                          ) : Number(p.stock) <= 5 ? (
-                            <b style={{ color: '#d97706' }}>
-                              Low Stock Warning!
-                            </b>
-                          ) : null}
-                          <br />
-                          <button
-                            style={styles.gray}
-                            onClick={() => editProduct(p)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            style={styles.red}
-                            onClick={() => deleteProduct(p.id)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
+                <button
+                  style={styles.green}
+                  disabled={loading}
+                  onClick={() => saveUdharPayment(bill)}
+                >
+                  {loading ? 'Saving...' : 'Save Payment'}
+                </button>
+                <button
+                  style={styles.whatsapp}
+                  onClick={() => whatsappReminder(bill)}
+                >
+                  WhatsApp Reminder
+                </button>
+                {bill.payments.length > 0 && (
+                  <>
+                    <h4>Payment History</h4>
+                    {bill.payments.map((p) => (
+                      <p key={p.id}>
+                        {money(p.amount)} — {p.payment_method || '-'}
+                      </p>
                     ))}
-                </div>
-              </>
-            )}
+                  </>
+                )}
+              </div>
+            ))
+          )}
+          <p>{message}</p>
+        </>
+      )}
 
-            {page === 'bill' && (
-              <>
-                <h3>New Customer Bill</h3>
-                <div style={styles.box}>
-                  <h3>Customer Details</h3>
-                  <input
-                    style={styles.input}
-                    placeholder="Customer Name"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                  />
-                  <input
-                    style={styles.input}
-                    placeholder="Mobile Number"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                  />
-                  <input
-                    style={styles.input}
-                    placeholder="Address (optional)"
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                  />
-                  <h3>Udhaar Wapsi Ki Date</h3>
-                  <button style={styles.gray} onClick={() => chooseDueDate(7)}>
-                    7 Din
-                  </button>
-                  <button style={styles.gray} onClick={() => chooseDueDate(15)}>
-                    15 Din
-                  </button>
-                  <button style={styles.gray} onClick={() => chooseDueDate(30)}>
-                    30 Din
-                  </button>
-                  <input
-                    style={styles.input}
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                  />
-                  <p>
-                    Selected Due Date: {dueDate || 'Abhi date select nahi hui'}
-                  </p>
-                </div>
-                <div style={styles.box}>
-                  <h3>Add Product to Bill</h3>
-                  <input
-                    style={styles.input}
-                    placeholder="Barcode scan karein ya number likhein"
-                    value={barcodeSearch}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setBarcodeSearch(value);
-                      const found = products.find(
-                        (p) => String(p.barcode || '') === value.trim()
-                      );
-                      if (found) addScannedOrSelectedProduct(found);
-                    }}
-                  />
-                  <button
-                    style={styles.gray}
-                    onClick={() => setScannerOpen((v) => !v)}
-                  >
-                    {scannerOpen
-                      ? 'Scanner Band Karein'
-                      : 'Open Barcode Scanner'}
-                  </button>
-                  {scannerOpen && (
-                    <div
-                      id="barcode-reader"
-                      style={{ width: '100%', marginTop: 10 }}
-                    />
-                  )}
-                  <input
-                    style={styles.input}
-                    type="search"
-                    placeholder="Product ka naam likhein... (misal: Sports)"
-                    value={billProductSearch}
-                    onChange={(e) => {
-                      setBillProductSearch(e.target.value);
-                      setSelectedProduct('');
-                      setSellingPrice('');
-                    }}
-                  />
-                  {billProductSearch.trim() && (
-                    <div
-                      style={{
-                        maxHeight: 190,
-                        overflowY: 'auto',
-                        border: '1px solid #b8d4f5',
-                        borderRadius: 10,
-                        background: '#fff',
-                        marginTop: 6,
-                        marginBottom: 10,
-                      }}
-                    >
-                      {products
-                        .filter((p) =>
-                          String(p.name || '')
-                            .toLowerCase()
-                            .includes(billProductSearch.trim().toLowerCase())
-                        )
-                        .map((p) => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            disabled={Number(p.stock) <= 0}
-                            onClick={() => {
-                              setSelectedProduct(String(p.id));
-                              setSellingPrice(String(p.price || ''));
-                              setBillProductSearch(p.name || '');
-                              setMessage('Product select ho gaya: ' + p.name);
-                            }}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              width: '100%',
-                              padding: '10px 12px',
-                              border: 0,
-                              borderBottom: '1px solid #e5edf8',
-                              background: '#fff',
-                              color: Number(p.stock) <= 0 ? '#999' : '#082653',
-                              textAlign: 'left',
-                              cursor:
-                                Number(p.stock) <= 0
-                                  ? 'not-allowed'
-                                  : 'pointer',
-                            }}
-                          >
-                            <span>{p.name}</span>
-                            <span>
-                              {Number(p.stock) <= 0
-                                ? 'Out of Stock'
-                                : `Stock: ${p.stock} · PKR ${p.price || 0}`}
-                            </span>
-                          </button>
-                        ))}
-                      {products.filter((p) =>
-                        String(p.name || '')
-                          .toLowerCase()
-                          .includes(billProductSearch.trim().toLowerCase())
-                      ).length === 0 && (
-                        <p style={{ padding: 10, margin: 0, color: '#64748b' }}>
-                          Is naam se koi product nahi mila.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  {selectedProduct && (
-                    <p
-                      style={{
-                        margin: '6px 0 10px',
-                        color: '#087443',
-                        fontWeight: 700,
-                      }}
-                    >
-                      Selected:{' '}
-                      {products.find(
-                        (p) => String(p.id) === String(selectedProduct)
-                      )?.name || ''}
-                    </p>
-                  )}
-                  <input
-                    style={styles.input}
-                    type="number"
-                    min="1"
-                    placeholder="Quantity"
-                    value={quantity}
-                    onChange={(e) => setQuantity(e.target.value)}
-                  />
-                  <input
-                    style={styles.input}
-                    type="number"
-                    min="0"
-                    placeholder="Selling Price per item (PKR)"
-                    value={sellingPrice}
-                    onChange={(e) => setSellingPrice(e.target.value)}
-                  />
-                  <button style={styles.green} onClick={addToCart}>
-                    Add to Bill
-                  </button>
-                </div>
-                <h3>Bill Items</h3>
-                {cart.map((item, index) => (
-                  <div style={styles.product} key={index}>
-                    <b>{item.name}</b>
-                    <p>Quantity: {item.quantity}</p>
-                    <p>Selling Price: {money(item.price)}</p>
-                    <p>Amount: {money(item.quantity * item.price)}</p>
-                    <button
-                      style={styles.red}
-                      onClick={() => removeCartItem(index)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
-                <div style={styles.box}>
-                  <h3>Total Bill: {money(billTotal)}</h3>
-                  <label>Paid Amount (PKR)</label>
-                  <input
-                    style={styles.input}
-                    type="number"
-                    min="0"
-                    value={paidAmount}
-                    onChange={(e) => setPaidAmount(e.target.value)}
-                  />
-                  <label>Payment Method</label>
-                  <select
-                    style={styles.input}
-                    value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
-                  >
-                    <option>Cash</option>
-                    <option>Bank</option>
-                    <option>JazzCash</option>
-                    <option>EasyPaisa</option>
-                  </select>
-                  <h3>Remaining Udhaar: {money(remaining)}</h3>
-                  <button
-                    style={styles.green}
-                    onClick={saveBill}
-                    disabled={loading || !cart.length}
-                  >
-                    {loading ? 'Saving Bill...' : 'Save Bill & Download PDF'}
-                  </button>
-                </div>
-                <p>{message}</p>
-              </>
+      {page === 'stock' && (
+        <>
+          <h3>Stock Management</h3>
+          <button style={styles.green} onClick={loadProducts}>
+            Refresh Stock
+          </button>
+          <p>Total Products: {products.length}</p>
+          {products.map((p) => (
+            <div key={p.id} style={styles.product}>
+              <b>{p.name}</b>
+              <p>Stock Quantity: {p.stock}</p>
+              {Number(p.stock) <= 0 ? (
+                <b style={{ color: 'red' }}>Out of Stock</b>
+              ) : Number(p.stock) <= 5 ? (
+                <b style={{ color: '#d97706' }}>Low Stock Warning!</b>
+              ) : (
+                <b style={{ color: 'green' }}>Stock Available</b>
+              )}
+            </div>
+          ))}
+          <p>{message}</p>
+        </>
+      )}
+
+      {(page === 'profits' || page === 'dailyReport') && (
+        <>
+          <h3>
+            {page === 'profits'
+              ? 'Profit Reports'
+              : 'Daily Sale and Profit Report'}
+          </h3>
+          <button
+            style={styles.green}
+            onClick={async () => {
+              await loadProfitReports();
+              await loadExpenses();
+            }}
+          >
+            Refresh Reports
+          </button>
+          <div style={styles.box}>
+            <h3>
+              Total Sales: {money(profitRows.reduce((s, r) => s + r.sale, 0))}
+            </h3>
+            <h3>
+              Purchase Cost: {money(profitRows.reduce((s, r) => s + r.cost, 0))}
+            </h3>
+            <h2 style={{ color: 'green' }}>
+              Gross Profit:{' '}
+              {money(profitRows.reduce((s, r) => s + r.profit, 0))}
+            </h2>
+            <p>Today Sale: {money(todaySales)}</p>
+            <p>Today Gross Profit: {money(todayProfit)}</p>
+            <p>Today Expenses: {money(todayExpenses)}</p>
+            <b>Today Net Profit: {money(todayProfit - todayExpenses)}</b>
+          </div>
+          <h3>
+            {page === 'dailyReport' ? 'Aaj ke Bills' : 'Bill Wise Profit'}
+          </h3>
+          {(page === 'dailyReport'
+            ? profitRows.filter((r) => r.date === getToday())
+            : profitRows
+          ).length === 0 ? (
+            <p>Is period mein sales record nahi hai.</p>
+          ) : (
+            (page === 'dailyReport'
+              ? profitRows.filter((r) => r.date === getToday())
+              : profitRows
+            ).map((row) => (
+              <div key={row.order_id} style={styles.product}>
+                <b>Bill Number: {row.order_id}</b>
+                <p>Customer: {row.customer_name || '-'}</p>
+                <p>
+                  Date:{' '}
+                  {row.created_at
+                    ? new Date(row.created_at).toLocaleString()
+                    : '-'}
+                </p>
+                <p>Sale: {money(row.sale)}</p>
+                <p>Purchase Cost: {money(row.cost)}</p>
+                <b style={{ color: 'green' }}>Profit: {money(row.profit)}</b>
+              </div>
+            ))
+          )}
+          <p>{message}</p>
+        </>
+      )}
+
+      {page === 'expenses' && (
+        <>
+          <h3>Expenses Record</h3>
+          <div style={styles.box}>
+            <input
+              style={styles.input}
+              placeholder="Expense ka naam (misal: Kiraya, Bijli)"
+              value={expenseTitle}
+              onChange={(e) => setExpenseTitle(e.target.value)}
+            />
+            <input
+              style={styles.input}
+              type="number"
+              min="0"
+              placeholder="Amount (PKR)"
+              value={expenseAmount}
+              onChange={(e) => setExpenseAmount(e.target.value)}
+            />
+            <select
+              style={styles.input}
+              value={expenseCategory}
+              onChange={(e) => setExpenseCategory(e.target.value)}
+            >
+              <option>General</option>
+              <option>Rent</option>
+              <option>Electricity</option>
+              <option>Transport</option>
+              <option>Salary</option>
+              <option>Repair</option>
+              <option>Other</option>
+            </select>
+            <input
+              style={styles.input}
+              type="date"
+              value={expenseDate}
+              onChange={(e) => setExpenseDate(e.target.value)}
+            />
+            <textarea
+              style={styles.input}
+              placeholder="Note (optional)"
+              value={expenseNote}
+              onChange={(e) => setExpenseNote(e.target.value)}
+            />
+            <button
+              style={styles.green}
+              disabled={loading}
+              onClick={saveExpense}
+            >
+              {loading ? 'Saving...' : 'Save Expense'}
+            </button>
+          </div>
+          <h3>Expense History</h3>
+          <button style={styles.gray} onClick={loadExpenses}>
+            Refresh Expenses
+          </button>
+          <h3>
+            Total Expenses:{' '}
+            {money(expenses.reduce((s, e) => s + Number(e.amount || 0), 0))}
+          </h3>
+          {expenses.length === 0 ? (
+            <p>Abhi koi expense record nahi hai.</p>
+          ) : (
+            expenses.map((e) => (
+              <div key={e.id} style={styles.product}>
+                <b>{e.title}</b>
+                <p>Amount: {money(e.amount)}</p>
+                <p>Category: {e.category || '-'}</p>
+                <p>Date: {e.expense_date || '-'}</p>
+                <p>Note: {e.note || '-'}</p>
+                <button style={styles.red} onClick={() => deleteExpense(e.id)}>
+                  Delete
+                </button>
+              </div>
+            ))
+          )}
+          <p>{message}</p>
+        </>
+      )}
+
+      {page === 'itemRequests' && (
+        <>
+          <h3>New Item Demand</h3>
+          <div style={styles.box}>
+            <input
+              style={styles.input}
+              placeholder="Item ka naam likhein"
+              value={itemName}
+              onChange={(e) => setItemName(e.target.value)}
+            />
+            <button
+              style={styles.green}
+              onClick={saveItemRequest}
+              disabled={loading}
+            >
+              {loading ? 'Saving...' : 'Save Item'}
+            </button>
+            <p>{message}</p>
+          </div>
+          <h3>Requested Items</h3>
+          {!itemRequests.length ? (
+            <p>Abhi koi new item request nahi hai.</p>
+          ) : (
+            itemRequests.map((item) => (
+              <div key={item.id} style={styles.product}>
+                <b>{item.item_name}</b>
+                <button
+                  style={styles.red}
+                  onClick={() => deleteItemRequest(item.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            ))
+          )}
+        </>
+      )}
+
+      {page === 'products' && (
+        <>
+          <h3>Products Management</h3>
+          <div style={styles.box}>
+            <h3>{editingId ? 'Edit Product' : 'Add New Product'}</h3>
+            <input
+              style={styles.input}
+              placeholder="Product Name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <input
+              style={styles.input}
+              type="number"
+              placeholder="Buy Price (PKR)"
+              value={buyPrice}
+              onChange={(e) => setBuyPrice(e.target.value)}
+            />
+            <input
+              style={styles.input}
+              type="number"
+              placeholder="Stock Quantity"
+              value={stock}
+              onChange={(e) => setStock(e.target.value)}
+            />
+            <input
+              style={styles.input}
+              placeholder="Barcode Number (optional)"
+              value={barcode}
+              onChange={(e) => setBarcode(e.target.value)}
+            />
+            <select
+              style={styles.input}
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+            >
+              <option value="">Select Category</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <input
+              style={styles.input}
+              placeholder="Description (optional)"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <label style={styles.uploadLabel}>Product Picture (Camera / Gallery)
+              <input style={{...styles.input, marginBottom: 4}} type="file" accept="image/*" capture="environment" onChange={(e) => setProductImage(e.target.files?.[0] || null)} />
+              {productImage && <small>{productImage.name}</small>}
+            </label>
+            <button
+              style={styles.green}
+              onClick={saveProduct}
+              disabled={loading}
+            >
+              {loading
+                ? 'Saving...'
+                : editingId
+                ? 'Update Product'
+                : 'Save Product'}
+            </button>
+            {editingId && (
+              <button style={styles.gray} onClick={clearForm}>
+                Cancel Edit
+              </button>
             )}
-          </main>
-        </div>
+            <p>{message}</p>
+          </div>
+          <div style={styles.sectionHeading}><h3 style={{margin:0}}>All Products</h3><span>{products.length} items</span></div>
+          <input style={styles.input} placeholder="Search product name / barcode..." value={productSearch} onChange={(e) => setProductSearch(e.target.value)} />
+          <select style={styles.input} value={productCategoryFilter} onChange={(e) => setProductCategoryFilter(e.target.value)}><option value="all">All Categories</option>{categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}</select>
+          {!products.length && <p>Abhi koi product nahi hai.</p>}
+          <div style={styles.productGrid}>
+          {products.filter(p => (p.name || '').toLowerCase().includes(productSearch.toLowerCase()) || String(p.barcode || '').includes(productSearch)).filter(p => productCategoryFilter === 'all' || String(p.category_id) === productCategoryFilter).map((p) => (
+            <div key={p.id} style={styles.productCard}>
+              {p.image_url ? <img src={p.image_url} alt={p.name} style={styles.productImage} /> : <div style={styles.imagePlaceholder}>No Image</div>}
+              <div style={{padding:14, minWidth:0}}>
+              <b style={{fontSize:16}}>{p.name}</b>
+              <p>
+                Category:{' '}
+                {categories.find((c) => String(c.id) === String(p.category_id))
+                  ?.name || '-'}
+              </p>
+              <p>Buy Price: {money(p.buy_price)}</p>
+              <p>Stock: {p.stock}</p>
+              <p>Barcode: {p.barcode || '-'}</p>
+              {Number(p.stock) <= 0 ? (
+                <b style={{ color: 'red' }}>Out of Stock</b>
+              ) : Number(p.stock) <= 5 ? (
+                <b style={{ color: '#d97706' }}>Low Stock Warning!</b>
+              ) : null}
+              <br />
+              <button style={styles.gray} onClick={() => editProduct(p)}>
+                Edit
+              </button>
+              <button style={styles.red} onClick={() => deleteProduct(p.id)}>
+                Delete
+              </button>
+              </div>
+            </div>
+          ))}
+          </div>
+        </>
+      )}
+
+      {page === 'bill' && (
+        <>
+          <h3>New Customer Bill</h3>
+          <div style={styles.box}>
+            <h3>Customer Details</h3>
+            <input
+              style={styles.input}
+              placeholder="Customer Name"
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+            />
+            <input
+              style={styles.input}
+              placeholder="Mobile Number"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+            />
+            <input
+              style={styles.input}
+              placeholder="Address (optional)"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+            />
+            <h3>Udhaar Wapsi Ki Date</h3>
+            <button style={styles.gray} onClick={() => chooseDueDate(7)}>
+              7 Din
+            </button>
+            <button style={styles.gray} onClick={() => chooseDueDate(15)}>
+              15 Din
+            </button>
+            <button style={styles.gray} onClick={() => chooseDueDate(30)}>
+              30 Din
+            </button>
+            <input
+              style={styles.input}
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+            />
+            <p>Selected Due Date: {dueDate || 'Abhi date select nahi hui'}</p>
+          </div>
+          <div style={styles.box}>
+            <h3>Add Product to Bill</h3>
+            <input
+              style={styles.input}
+              placeholder="Barcode scan karein ya number likhein"
+              value={barcodeSearch}
+              onChange={(e) => {
+                const value = e.target.value;
+                setBarcodeSearch(value);
+                const found = products.find(
+                  (p) => String(p.barcode || '') === value.trim()
+                );
+                if (found) addScannedOrSelectedProduct(found);
+              }}
+            />
+            <button
+              style={styles.gray}
+              onClick={() => setScannerOpen((v) => !v)}
+            >
+              {scannerOpen ? 'Scanner Band Karein' : 'Open Barcode Scanner'}
+            </button>
+            {scannerOpen && (
+              <div
+                id="barcode-reader"
+                style={{ width: '100%', marginTop: 10 }}
+              />
+            )}
+            <select
+              style={styles.input}
+              value={selectedProduct}
+              onChange={(e) => {
+                const p = products.find((x) => String(x.id) === e.target.value);
+                setSelectedProduct(e.target.value);
+                if (p) setSellingPrice(String(p.price || ''));
+              }}
+            >
+              <option value="">Select Product</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.id} disabled={Number(p.stock) <= 0}>
+                  {p.name} — Stock: {p.stock}
+                </option>
+              ))}
+            </select>
+            <input
+              style={styles.input}
+              type="number"
+              min="1"
+              placeholder="Quantity"
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+            />
+            <input
+              style={styles.input}
+              type="number"
+              min="0"
+              placeholder="Selling Price per item (PKR)"
+              value={sellingPrice}
+              onChange={(e) => setSellingPrice(e.target.value)}
+            />
+            <button style={styles.green} onClick={addToCart}>
+              Add to Bill
+            </button>
+          </div>
+          <h3>Bill Items</h3>
+          {cart.map((item, index) => (
+            <div style={styles.product} key={index}>
+              <b>{item.name}</b>
+              <p>Quantity: {item.quantity}</p>
+              <p>Selling Price: {money(item.price)}</p>
+              <p>Amount: {money(item.quantity * item.price)}</p>
+              <button style={styles.red} onClick={() => removeCartItem(index)}>
+                Remove
+              </button>
+            </div>
+          ))}
+          <div style={styles.box}>
+            <h3>Total Bill: {money(billTotal)}</h3>
+            <label>Paid Amount (PKR)</label>
+            <input
+              style={styles.input}
+              type="number"
+              min="0"
+              value={paidAmount}
+              onChange={(e) => setPaidAmount(e.target.value)}
+            />
+            <label>Payment Method</label>
+            <select
+              style={styles.input}
+              value={paymentMethod}
+              onChange={(e) => setPaymentMethod(e.target.value)}
+            >
+              <option>Cash</option>
+              <option>Bank</option>
+              <option>JazzCash</option>
+              <option>EasyPaisa</option>
+            </select>
+            <h3>Remaining Udhaar: {money(remaining)}</h3>
+            <button
+              style={styles.green}
+              onClick={saveBill}
+              disabled={loading || !cart.length}
+            >
+              {loading ? 'Saving Bill...' : 'Save Bill & Download PDF'}
+            </button>
+          </div>
+          <p>{message}</p>
+        </>
+      )}
+
+        </main>
       </div>
     </div>
   );
 }
 
 const styles = {
-  appShell: {
-    minHeight: '100vh',
-    background: '#f3f6fb',
-    color: '#172b4d',
-    fontFamily: 'Inter, Arial, sans-serif',
-  },
-  topHeader: {
-    background: 'linear-gradient(120deg,#102b52,#174b83)',
-    color: 'white',
-    padding: '20px 26px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 15,
-    boxShadow: '0 4px 16px rgba(15,35,65,.16)',
-  },
-  headerLogout: {
-    background: '#ffffff',
-    color: '#15365e',
-    border: 0,
-    borderRadius: 9,
-    padding: '10px 16px',
-    fontWeight: 700,
-    cursor: 'pointer',
-  },
-  appLayout: {
-    display: 'grid',
-    gridTemplateColumns: '230px minmax(0,1fr)',
-    gap: 22,
-    maxWidth: 1500,
-    margin: '0 auto',
-    padding: 22,
-  },
-  sidebar: {
-    background: '#102b52',
-    borderRadius: 16,
-    padding: 14,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 7,
-    alignSelf: 'start',
-    position: 'sticky',
-    top: 16,
-  },
-  sidebarCaption: {
-    color: '#93b4da',
-    fontSize: 10,
-    fontWeight: 800,
-    letterSpacing: 1.4,
-    padding: '13px 10px 5px',
-  },
-  navButton: {
-    display: 'block',
-    width: '100%',
-    textAlign: 'left',
-    color: '#e5efff',
-    background: 'transparent',
-    border: 0,
-    borderRadius: 9,
-    padding: '11px 12px',
-    cursor: 'pointer',
-    fontSize: 14,
-    textDecoration: 'none',
-  },
-  navActive: {
-    display: 'block',
-    width: '100%',
-    textAlign: 'left',
-    color: '#102b52',
-    background: '#ffffff',
-    border: 0,
-    borderRadius: 9,
-    padding: '11px 12px',
-    cursor: 'pointer',
-    fontWeight: 800,
-    fontSize: 14,
-  },
-  mainContent: {
-    minWidth: 0,
-    background: '#ffffff',
-    borderRadius: 16,
-    padding: 22,
-    boxShadow: '0 4px 22px rgba(15,35,65,.06)',
-  },
-  statsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))',
-    gap: 13,
-    margin: '15px 0 22px',
-  },
-  statCard: {
-    background: '#f1f6ff',
-    border: '1px solid #dce8f8',
-    borderRadius: 13,
-    padding: 17,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  },
-  sectionHeading: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    margin: '22px 0 12px',
-    color: '#15365e',
-  },
-  productGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill,minmax(165px,1fr))',
-    gap: 12,
-  },
-  productCard: {
-    border: '1px solid #e1e9f4',
-    borderRadius: 14,
-    overflow: 'hidden',
-    background: '#fff',
-    boxShadow: '0 3px 12px rgba(20,45,80,.05)',
-  },
-  productImage: {
-    width: '100%',
-    height: 125,
-    objectFit: 'contain',
-    display: 'block',
-    background: '#f3f6fb',
-    padding: 8,
-  },
-  imagePlaceholder: {
-    height: 155,
-    display: 'grid',
-    placeItems: 'center',
-    color: '#8294aa',
-    background: '#edf2f8',
-    fontWeight: 700,
-  },
+  appShell: { minHeight: '100vh', background: '#f3f6fb', color: '#172b4d', fontFamily: 'Inter, Arial, sans-serif' },
+  topHeader: { background: 'linear-gradient(120deg,#102b52,#174b83)', color: 'white', padding: '20px 26px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 15, boxShadow: '0 4px 16px rgba(15,35,65,.16)' },
+  headerLogout: { background: '#ffffff', color: '#15365e', border: 0, borderRadius: 9, padding: '10px 16px', fontWeight: 700, cursor: 'pointer' },
+  appLayout: { display: 'grid', gridTemplateColumns: '230px minmax(0,1fr)', gap: 22, maxWidth: 1500, margin: '0 auto', padding: 22 },
+  sidebar: { background: '#102b52', borderRadius: 16, padding: 14, display: 'flex', flexDirection: 'column', gap: 7, alignSelf: 'start', position: 'sticky', top: 16 },
+  sidebarCaption: { color: '#93b4da', fontSize: 10, fontWeight: 800, letterSpacing: 1.4, padding: '13px 10px 5px' },
+  navButton: { display: 'block', width: '100%', textAlign: 'left', color: '#e5efff', background: 'transparent', border: 0, borderRadius: 9, padding: '11px 12px', cursor: 'pointer', fontSize: 14, textDecoration: 'none' },
+  navActive: { display: 'block', width: '100%', textAlign: 'left', color: '#102b52', background: '#ffffff', border: 0, borderRadius: 9, padding: '11px 12px', cursor: 'pointer', fontWeight: 800, fontSize: 14 },
+  mainContent: { minWidth: 0, background: '#ffffff', borderRadius: 16, padding: 22, boxShadow: '0 4px 22px rgba(15,35,65,.06)' },
+  statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))', gap: 13, margin: '15px 0 22px' },
+  statCard: { background: '#f1f6ff', border: '1px solid #dce8f8', borderRadius: 13, padding: 17, display: 'flex', flexDirection: 'column', gap: 8 },
+  sectionHeading: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '22px 0 12px', color: '#15365e' },
+  productGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(235px,1fr))', gap: 15 },
+  productCard: { border: '1px solid #e1e9f4', borderRadius: 14, overflow: 'hidden', background: '#fff', boxShadow: '0 3px 12px rgba(20,45,80,.05)' },
+  productImage: { width: '100%', height: 155, objectFit: 'cover', display: 'block', background: '#f3f6fb' },
+  imagePlaceholder: { height: 155, display: 'grid', placeItems: 'center', color: '#8294aa', background: '#edf2f8', fontWeight: 700 },
   center: { textAlign: 'center', padding: '30px' },
   container: {
     padding: '15px',
@@ -2672,15 +1821,6 @@ const styles = {
     padding: '10px',
     margin: '10px 0',
     boxSizing: 'border-box',
-  },
-  blue: {
-    background: '#1769ed',
-    color: '#fff',
-    padding: '12px 14px',
-    border: 'none',
-    cursor: 'pointer',
-    margin: '5px',
-    borderRadius: '8px',
   },
   green: {
     background: 'green',
