@@ -27,6 +27,9 @@ export default function App() {
   const [returnMethod, setReturnMethod] = useState('cash');
   const [returnPeriod, setReturnPeriod] = useState('month');
   const [returnRows, setReturnRows] = useState([]);
+  const [returnSelections, setReturnSelections] = useState({});
+  const [billProductSearch, setBillProductSearch] = useState('');
+  const [billProductSelections, setBillProductSelections] = useState({});
 
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -550,6 +553,8 @@ export default function App() {
       return { product_id: item.product_id, name: product?.name || 'Product #' + item.product_id, original_quantity: Number(item.quantity), returned_quantity: alreadyReturned, available_quantity: Math.max(0, Number(item.quantity) - alreadyReturned), price: Number(item.price || 0) };
     }).filter((item) => item.available_quantity > 0);
     setReturnBill(oldBill);
+    setReturnItems([]);
+    setReturnSelections({});
     if (!customerName.trim()) setCustomerName(oldBill.customer_name || '');
     if (!phone.trim()) setPhone(oldBill.phone || '');
     setReturnableItems(items);
@@ -567,6 +572,54 @@ export default function App() {
       return [...old, { old_order_id: returnBill.id, product_id: item.product_id, name: item.name, quantity: qty, price: item.price, customer_id: returnBill.customer_id || null }];
     });
     setMessage('Return item new bill mein add ho gayi.');
+  };
+
+  const applySelectedReturns = () => {
+    if (!returnBill) return setMessage('Pehle purana bill search karein.');
+    const selected = returnableItems.filter((item) => returnSelections[item.product_id]?.checked);
+    if (!selected.length) return setMessage('Return ke liye kam az kam aik item select karein.');
+    const prepared = [];
+    for (const item of selected) {
+      const qty = Number(returnSelections[item.product_id]?.quantity || 1);
+      if (!Number.isInteger(qty) || qty <= 0 || qty > item.available_quantity)
+        return setMessage(`${item.name}: return quantity 1 se ${item.available_quantity} ke darmiyan honi chahiye.`);
+      prepared.push({ old_order_id: returnBill.id, product_id: item.product_id, name: item.name, quantity: qty, price: item.price, customer_id: returnBill.customer_id || null });
+    }
+    setReturnItems((old) => {
+      const otherBills = old.filter((x) => String(x.old_order_id) !== String(returnBill.id));
+      return [...otherBills, ...prepared];
+    });
+    setMessage(`${prepared.length} return item(s) new bill mein add ho gayi hain.`);
+  };
+
+  const addSelectedProductsToCart = () => {
+    const selected = products.filter((p) => billProductSelections[p.id]?.checked);
+    if (!selected.length) return setMessage('Bill ke liye kam az kam aik product select karein.');
+    const additions = [];
+    for (const product of selected) {
+      const selection = billProductSelections[product.id] || {};
+      const qty = Number(selection.quantity || 1);
+      const priceText = selection.price === undefined ? String(product.price || '') : String(selection.price);
+      const price = Number(priceText);
+      const already = cart.filter((i) => String(i.product_id) === String(product.id)).reduce((sum, i) => sum + Number(i.quantity || 0), 0);
+      if (!Number.isInteger(qty) || qty <= 0 || priceText === '' || !Number.isFinite(price) || price < 0)
+        return setMessage(`${product.name}: quantity aur selling price theek likhein.`);
+      if (already + qty > Number(product.stock || 0))
+        return setMessage(`${product.name}: itna stock available nahi. Available stock: ${Math.max(0, Number(product.stock || 0) - already)}`);
+      additions.push({ product_id: product.id, name: product.name, quantity: qty, price, buy_price: Number(product.buy_price || 0) });
+    }
+    setCart((old) => {
+      const next = [...old];
+      additions.forEach((add) => {
+        const index = next.findIndex((item) => String(item.product_id) === String(add.product_id));
+        if (index >= 0) next[index] = { ...next[index], quantity: next[index].quantity + add.quantity, price: add.price };
+        else next.push(add);
+      });
+      return next;
+    });
+    setBillProductSelections({});
+    setBillProductSearch('');
+    setMessage(`${additions.length} product(s) bill mein add ho gaye.`);
   };
 
   const openProfitReports = async () => {
@@ -697,6 +750,12 @@ export default function App() {
     setSellingPrice('');
     setQuantity('1');
     setBarcodeSearch('');
+    setReturnSelections({});
+    setBillProductSearch('');
+    setBillProductSelections({});
+    setReturnItems([]);
+    setReturnBill(null);
+    setReturnableItems([]);
     await loadProducts();
   };
 
@@ -1150,7 +1209,7 @@ const downloadBillPdf = (bill, items, paid, due, returns = []) => {
     downloadBillPdf(billInfo, [...cart], paid, finalPayable > paid ? dueDate : '', [...returnItems]);
     setLoading(false);
     await Promise.all([loadProducts(), loadDueReminders(), loadProfitReports(), loadTopSelling(), loadReturnReports()]);
-    setCart([]); setReturnItems([]); setReturnBill(null); setReturnableItems([]); setReturnBillNumber('');
+    setCart([]); setReturnItems([]); setReturnBill(null); setReturnableItems([]); setReturnBillNumber(''); setReturnSelections({}); setBillProductSelections({}); setBillProductSearch('');
     setCustomerName(''); setPhone(''); setAddress(''); setPaidAmount('0'); setDueDate('');
     setMessage(`Bill successfully save ho gaya! Bill number: ${order.id}. Return: ${money(returnTotal)}. ${creditApplied > 0 ? `Customer credit adjust: ${money(creditApplied)}. ` : ''}${extraRefund > 0 ? (returnMethod === 'cash' ? `Cash refund: ${money(extraRefund)}.` : `Customer ke udhar/account mein jama: ${money(extraRefund)}.`) : ''} PDF download shuru ho gaya.`);
   };
@@ -1960,14 +2019,24 @@ const downloadBillPdf = (bill, items, paid, due, returns = []) => {
             <p>Customer ka purana bill number likh kar search karein. Return ki raqam naye bill se minus hogi.</p>
             <input style={styles.input} type="number" min="1" placeholder="Purana Bill Number" value={returnBillNumber} onChange={(e) => setReturnBillNumber(e.target.value)} />
             <button style={styles.gray} onClick={searchOldBillForReturn} disabled={loading}>Purana Bill Search Karein</button>
-            {returnBill && <><p><b>Bill #{returnBill.id}</b> — {returnBill.customer_name || '-'} — {returnBill.phone || '-'}</p>
-              {returnableItems.map((item) => <div key={item.product_id} style={styles.product}>
-                <b>{item.name}</b><p>Original Qty: {item.original_quantity} | Pehle Return: {item.returned_quantity} | Ab Return ho sakti: {item.available_quantity}</p><p>Original Rate: {money(item.price)}</p>
-                <button style={styles.green} onClick={() => addReturnItem(item.product_id, 1)}>1 Return Karein</button>
-                <input style={styles.input} type="number" min="1" max={item.available_quantity} placeholder="Return Quantity" onBlur={(e) => { if (e.target.value) addReturnItem(item.product_id, e.target.value); }} />
-              </div>)}
+            {returnBill && <>
+              <p><b>Bill #{returnBill.id}</b> — {returnBill.customer_name || '-'} — {returnBill.phone || '-'}</p>
+              <p>Jin items ko wapas lena hai un par checkbox lagayein aur quantity likhein:</p>
+              {returnableItems.map((item) => {
+                const selection = returnSelections[item.product_id] || { checked: false, quantity: '1' };
+                return <div key={item.product_id} style={styles.product}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 'bold' }}>
+                    <input type="checkbox" checked={!!selection.checked} onChange={(e) => setReturnSelections((old) => ({ ...old, [item.product_id]: { ...selection, checked: e.target.checked } }))} />
+                    {item.name}
+                  </label>
+                  <p>Original Qty: {item.original_quantity} | Pehle Return: {item.returned_quantity} | Ab Return ho sakti: {item.available_quantity}</p>
+                  <p>Original Rate: {money(item.price)}</p>
+                  <input style={styles.input} type="number" min="1" max={item.available_quantity} disabled={!selection.checked} value={selection.quantity} placeholder="Return Quantity" onChange={(e) => setReturnSelections((old) => ({ ...old, [item.product_id]: { ...selection, quantity: e.target.value } }))} />
+                </div>;
+              })}
+              <button style={styles.green} onClick={applySelectedReturns}>Selected Return Items Add Karein</button>
             </>}
-            {returnItems.map((item, index) => <p key={index}>{item.name}: {item.quantity} x {money(item.price)} = {money(item.quantity * item.price)} <button style={styles.red} onClick={() => setReturnItems((old) => old.filter((_, i) => i !== index))}>Remove Return</button></p>)}
+            {returnItems.map((item, index) => <p key={`${item.old_order_id}-${item.product_id}`}>{item.name}: {item.quantity} x {money(item.price)} = {money(item.quantity * item.price)} <button style={styles.red} onClick={() => setReturnItems((old) => old.filter((_, i) => i !== index))}>Remove Return</button></p>)}
             <b>Total Return: {money(returnTotal)}</b>
             {extraRefund > 0 && <><h4>Extra Return Amount: {money(extraRefund)}</h4><p>Extra paisay ka tareeqa select karein:</p><select style={styles.input} value={returnMethod} onChange={(e) => setReturnMethod(e.target.value)}><option value="cash">Cash Wapas Dein</option><option value="credit">Customer ke Udhar/Account Mein Jama Karein</option></select></>}
           </div>
@@ -2033,6 +2102,26 @@ const downloadBillPdf = (bill, items, paid, due, returns = []) => {
             <button style={styles.green} onClick={addToCart}>
               Add to Bill
             </button>
+            <hr style={{ margin: '18px 0', border: 0, borderTop: '1px solid #dbe3ec' }} />
+            <h4>Multiple Products Ek Saath Select Karein</h4>
+            <input style={styles.input} placeholder="Product name search karein..." value={billProductSearch} onChange={(e) => setBillProductSearch(e.target.value)} />
+            <div style={{ maxHeight: 360, overflowY: 'auto', border: '1px solid #dbe3ec', borderRadius: 8, padding: 8 }}>
+              {products.filter((p) => Number(p.stock) > 0 && p.name.toLowerCase().includes(billProductSearch.trim().toLowerCase())).map((p) => {
+                const selection = billProductSelections[p.id] || { checked: false, quantity: '1', price: String(p.price || '') };
+                return <div key={p.id} style={{ padding: '10px 4px', borderBottom: '1px solid #e5e7eb' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontWeight: 600 }}>
+                    <input type="checkbox" checked={!!selection.checked} onChange={(e) => setBillProductSelections((old) => ({ ...old, [p.id]: { ...selection, checked: e.target.checked } }))} />
+                    <span>{p.name} — Stock: {p.stock}</span>
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 7 }}>
+                    <input style={styles.input} type="number" min="1" max={p.stock} disabled={!selection.checked} placeholder="Quantity" value={selection.quantity} onChange={(e) => setBillProductSelections((old) => ({ ...old, [p.id]: { ...selection, quantity: e.target.value } }))} />
+                    <input style={styles.input} type="number" min="0" disabled={!selection.checked} placeholder="Selling Price" value={selection.price} onChange={(e) => setBillProductSelections((old) => ({ ...old, [p.id]: { ...selection, price: e.target.value } }))} />
+                  </div>
+                </div>;
+              })}
+              {products.filter((p) => Number(p.stock) > 0 && p.name.toLowerCase().includes(billProductSearch.trim().toLowerCase())).length === 0 && <p>Koi available product nahi mila.</p>}
+            </div>
+            <button style={styles.green} onClick={addSelectedProductsToCart}>Selected Products Bill Mein Add Karein</button>
           </div>
           <h3>Bill Items</h3>
           {cart.map((item, index) => (
