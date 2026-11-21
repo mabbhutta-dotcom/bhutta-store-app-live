@@ -17,6 +17,16 @@ export default function App() {
   const [dueReminders, setDueReminders] = useState([]);
   const [itemRequests, setItemRequests] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [topSelling, setTopSelling] = useState([]);
+  const [savedBills, setSavedBills] = useState([]);
+  const [selectedSavedBill, setSelectedSavedBill] = useState(null);
+  const [returnBillNumber, setReturnBillNumber] = useState('');
+  const [returnBill, setReturnBill] = useState(null);
+  const [returnableItems, setReturnableItems] = useState([]);
+  const [returnItems, setReturnItems] = useState([]);
+  const [returnMethod, setReturnMethod] = useState('cash');
+  const [returnPeriod, setReturnPeriod] = useState('month');
+  const [returnRows, setReturnRows] = useState([]);
 
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -63,11 +73,15 @@ export default function App() {
     )}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  const billTotal = cart.reduce(
+  const salesSubtotal = cart.reduce(
     (sum, item) => sum + item.quantity * item.price,
     0
   );
-  const remaining = billTotal - Number(paidAmount || 0);
+  const returnTotal = returnItems.reduce((sum, item) => sum + item.quantity * item.price, 0);
+  const billTotal = salesSubtotal - returnTotal;
+  const payableTotal = Math.max(0, billTotal);
+  const extraRefund = Math.max(0, -billTotal);
+  const remaining = payableTotal - Number(paidAmount || 0);
   const todaySales = profitRows
     .filter((r) => r.date === getToday())
     .reduce((s, r) => s + r.sale, 0);
@@ -269,7 +283,7 @@ export default function App() {
   const openProducts = async () => {
     setPage('products');
     setMessage('');
-    await Promise.all([loadCategories(), loadProducts()]);
+    await Promise.all([loadCategories(), loadProducts(), loadTopSelling()]);
   };
   const openCustomers = async () => {
     setPage('customers');
@@ -473,6 +487,88 @@ export default function App() {
     });
     setProfitRows(Object.values(grouped));
   };
+
+  const loadTopSelling = async () => {
+    const [{ data, error }, { data: returns, error: returnError }] = await Promise.all([
+      supabase.from('order_items').select('product_id, quantity, products(name)'),
+      supabase.from('order_returns').select('product_id, quantity'),
+    ]);
+    if (error) return setMessage('Top selling report error: ' + error.message);
+    if (returnError) return setMessage('Top selling returns error: ' + returnError.message);
+    const returned = {};
+    (returns || []).forEach((r) => { returned[r.product_id] = (returned[r.product_id] || 0) + Number(r.quantity || 0); });
+    const totals = {};
+    (data || []).forEach((row) => {
+      const id = row.product_id;
+      if (!id) return;
+      const product = Array.isArray(row.products) ? row.products[0] : row.products;
+      if (!totals[id]) totals[id] = { product_id: id, name: product?.name || 'Deleted Product', quantity: 0 };
+      totals[id].quantity += Number(row.quantity || 0);
+    });
+    Object.values(totals).forEach((item) => { item.quantity = Math.max(0, item.quantity - Number(returned[item.product_id] || 0)); });
+    setTopSelling(Object.values(totals).filter((item) => item.quantity > 0).sort((a, b) => b.quantity - a.quantity).slice(0, 5));
+  };
+
+  const loadSavedBills = async () => {
+    const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(200);
+    if (error) return setMessage('Saved bills load nahi huay: ' + error.message);
+    setSavedBills(data || []);
+  };
+
+  const openSavedBills = async () => {
+    setPage('savedBills');
+    setSelectedSavedBill(null);
+    setMessage('');
+    await loadSavedBills();
+  };
+
+  const openReturnReports = async () => {
+    setPage('returnReports');
+    setMessage('');
+    await loadReturnReports();
+  };
+
+  const loadReturnReports = async () => {
+    const { data, error } = await supabase.from('order_returns').select('*, customers(name)').order('created_at', { ascending: false });
+    if (error) return setMessage('Return report load nahi hui: ' + error.message);
+    setReturnRows(data || []);
+  };
+
+  const searchOldBillForReturn = async () => {
+    const id = Number(returnBillNumber);
+    if (!Number.isInteger(id) || id <= 0) return setMessage('Purane bill ka sahi number likhein.');
+    setLoading(true);
+    const { data: oldBill, error } = await supabase.from('orders').select('*').eq('id', id).maybeSingle();
+    if (error || !oldBill) { setLoading(false); return setMessage(error?.message || 'Is number ka bill nahi mila.'); }
+    const { data: oldItems, error: itemError } = await supabase.from('order_items').select('*').eq('order_id', id);
+    if (itemError) { setLoading(false); return setMessage(itemError.message); }
+    const { data: priorReturns, error: returnError } = await supabase.from('order_returns').select('product_id, quantity').eq('order_id', id);
+    if (returnError) { setLoading(false); return setMessage(returnError.message); }
+    const items = (oldItems || []).map((item) => {
+      const product = products.find((p) => String(p.id) === String(item.product_id));
+      const alreadyReturned = (priorReturns || []).filter((r) => String(r.product_id) === String(item.product_id)).reduce((n, r) => n + Number(r.quantity || 0), 0);
+      return { product_id: item.product_id, name: product?.name || 'Product #' + item.product_id, original_quantity: Number(item.quantity), returned_quantity: alreadyReturned, available_quantity: Math.max(0, Number(item.quantity) - alreadyReturned), price: Number(item.price || 0) };
+    }).filter((item) => item.available_quantity > 0);
+    setReturnBill(oldBill);
+    if (!customerName.trim()) setCustomerName(oldBill.customer_name || '');
+    if (!phone.trim()) setPhone(oldBill.phone || '');
+    setReturnableItems(items);
+    setLoading(false);
+    setMessage(items.length ? 'Purana bill mil gaya. Wapas hone wali item select karein.' : 'Is bill ki tamam items pehle hi return ho chuki hain.');
+  };
+
+  const addReturnItem = (productId, qtyValue) => {
+    const item = returnableItems.find((x) => String(x.product_id) === String(productId));
+    const qty = Number(qtyValue);
+    if (!item || !Number.isInteger(qty) || qty <= 0 || qty > item.available_quantity) return setMessage('Return quantity available quantity se zyada nahi ho sakti.');
+    setReturnItems((old) => {
+      const exists = old.find((x) => String(x.product_id) === String(productId) && String(x.old_order_id) === String(returnBill.id));
+      if (exists) return old.map((x) => x === exists ? { ...x, quantity: qty } : x);
+      return [...old, { old_order_id: returnBill.id, product_id: item.product_id, name: item.name, quantity: qty, price: item.price, customer_id: returnBill.customer_id || null }];
+    });
+    setMessage('Return item new bill mein add ho gayi.');
+  };
+
   const openProfitReports = async () => {
     setPage('profits');
     setMessage('');
@@ -587,6 +683,11 @@ export default function App() {
     setPage('bill');
     setMessage('');
     setCart([]);
+    setReturnItems([]);
+    setReturnBill(null);
+    setReturnableItems([]);
+    setReturnBillNumber('');
+    setReturnMethod('cash');
     setCustomerName('');
     setPhone('');
     setAddress('');
@@ -655,7 +756,7 @@ export default function App() {
   const removeCartItem = (index) => setCart(cart.filter((_, i) => i !== index));
 
  
-const downloadBillPdf = (bill, items, paid, due) => {
+const downloadBillPdf = (bill, items, paid, due, returns = []) => {
   const doc = new jsPDF();
   const pageWidth = 210;
   const navy = [15, 39, 71];
@@ -668,6 +769,8 @@ const downloadBillPdf = (bill, items, paid, due) => {
       sum + Number(item.quantity) * Number(item.price),
     0
   );
+
+  const returnDeduction = returns.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.price || 0), 0);
 
   const discount = Number(
     bill.discount ?? bill.discount_amount ?? 0
@@ -817,14 +920,35 @@ const downloadBillPdf = (bill, items, paid, due) => {
     doc.line(14, y - 2, 196, y - 2);
   });
 
-  if (y + 85 > 275) {
+  if (returns.length) {
+    y += 4;
+    if (y + 12 > 255) newPage();
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(170, 45, 45);
+    doc.text('RETURNED ITEMS', 14, y + 4);
+    y += 10;
+    returns.forEach((item) => {
+      if (y + 9 > 255) newPage();
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.text(String(item.name || 'Returned item'), 17, y);
+      doc.text(String(item.quantity), 112, y);
+      doc.text(Number(item.price).toFixed(2), 140, y);
+      doc.text((Number(item.quantity) * Number(item.price)).toFixed(2), 190, y, { align: 'right' });
+      y += 8;
+    });
+    doc.setTextColor(0, 0, 0);
+  }
+
+  if (y + 95 > 275) {
     newPage();
   }
 
   y += 7;
 
   doc.setFillColor(...blue);
-  doc.roundedRect(105, y, 91, 48, 3, 3, 'F');
+  doc.roundedRect(105, y, 91, 68, 3, 3, 'F');
 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
@@ -834,24 +958,24 @@ const downloadBillPdf = (bill, items, paid, due) => {
     align: 'right'
   });
 
-  doc.text('Discount:', 112, y + 18);
-  doc.text(money(discount), 190, y + 18, {
-    align: 'right'
-  });
+  doc.text('Return Deduction:', 112, y + 18);
+  doc.text(money(returnDeduction), 190, y + 18, { align: 'right' });
 
   doc.setFont('helvetica', 'bold');
-  doc.text('Grand Total:', 112, y + 29);
-  doc.text(money(grandTotal), 190, y + 29, {
-    align: 'right'
-  });
+  doc.text('Net Total:', 112, y + 29);
+  doc.text(money(grandTotal), 190, y + 29, { align: 'right' });
 
   doc.setFont('helvetica', 'normal');
   doc.text('Paid:', 112, y + 38);
-  doc.text(money(paidAmount), 190, y + 38, {
-    align: 'right'
-  });
+  doc.text(money(paidAmount), 190, y + 38, { align: 'right' });
+  doc.text('Balance:', 112, y + 48);
+  doc.text(money(remaining), 190, y + 48, { align: 'right' });
+  if (Number(bill.refund_amount || 0) > 0) {
+    doc.text('Extra Refund:', 112, y + 58);
+    doc.text(money(bill.refund_amount), 190, y + 58, { align: 'right' });
+  }
 
-  y += 55;
+  y += 75;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
@@ -898,197 +1022,137 @@ const downloadBillPdf = (bill, items, paid, due) => {
 
   const saveBill = async () => {
     if (!customerName.trim()) return setMessage('Customer ka naam likhein.');
-    if (!cart.length)
-      return setMessage('Bill mein kam az kam aik product add karein.');
+    if (!cart.length && !returnItems.length) return setMessage('Bill mein sale ya return item zaroor honi chahiye.');
     const paid = Number(paidAmount || 0);
-    if (!Number.isFinite(paid) || paid < 0 || paid > billTotal)
-      return setMessage(
-        'Paid amount total bill se zyada ya negative nahi ho sakta.'
-      );
-    if (paid < billTotal && !dueDate)
-      return setMessage('Udhaar ki wapsi ki date select karein.');
+    if (!Number.isFinite(paid) || paid < 0 || paid > payableTotal)
+      return setMessage('Paid amount payable total se zyada ya negative nahi ho sakta.');
+    if (payableTotal > paid && !dueDate) return setMessage('Udhaar ki wapsi ki date select karein.');
+    if (returnItems.length && !returnBill) return setMessage('Return ke liye purana bill search karein.');
+    if (extraRefund > 0 && !['cash', 'credit'].includes(returnMethod)) return setMessage('Refund ka tareeqa select karein.');
 
-    // Stock dobara server se check hota hai taake doosre device ki sale se stock negative na ho.
     setLoading(true);
     setMessage('');
     const stockBefore = [];
     for (const item of cart) {
-      const { data: p, error } = await supabase
-        .from('products')
-        .select('id, stock')
-        .eq('id', item.product_id)
-        .single();
+      const { data: p, error } = await supabase.from('products').select('id, stock').eq('id', item.product_id).single();
       if (error || !p || Number(p.stock) < item.quantity) {
         setLoading(false);
-        return setMessage(
-          error?.message ||
-            `Maazrat, ${item.name} ka stock ab ${
-              p?.stock ?? 0
-            } hai. Bill dobara check karein.`
-        );
+        return setMessage(error?.message || `${item.name} ka stock ab ${p?.stock ?? 0} hai. Bill dobara check karein.`);
       }
-      stockBefore.push({
-        id: p.id,
-        stock: Number(p.stock),
-        quantity: item.quantity,
-        name: item.name,
-      });
+      stockBefore.push({ id: p.id, stock: Number(p.stock), quantity: item.quantity, name: item.name });
     }
 
     let customerId = null;
     if (phone.trim()) {
-      const { data: oldCustomer, error: findError } = await supabase
-        .from('customers')
-        .select('id')
-        .eq('phone', phone.trim())
-        .maybeSingle();
-      if (findError) {
-        setLoading(false);
-        return setMessage(findError.message);
-      }
+      const { data: oldCustomer, error: findError } = await supabase.from('customers').select('id').eq('phone', phone.trim()).maybeSingle();
+      if (findError) { setLoading(false); return setMessage(findError.message); }
       if (oldCustomer) {
         customerId = oldCustomer.id;
-        const { error: customerUpdateError } = await supabase
-          .from('customers')
-          .update({ name: customerName.trim() })
-          .eq('id', customerId);
-        if (customerUpdateError) {
-          setLoading(false);
-          return setMessage(customerUpdateError.message);
-        }
+        const { error: customerUpdateError } = await supabase.from('customers').update({ name: customerName.trim() }).eq('id', customerId);
+        if (customerUpdateError) { setLoading(false); return setMessage(customerUpdateError.message); }
       }
     }
     if (!customerId) {
-      const { data: newCustomer, error } = await supabase
-        .from('customers')
-        .insert([{ name: customerName.trim(), phone: phone.trim() || null }])
-        .select('id')
-        .single();
-      if (error) {
-        setLoading(false);
-        return setMessage(error.message);
-      }
+      const { data: newCustomer, error } = await supabase.from('customers').insert([{ name: customerName.trim(), phone: phone.trim() || null }]).select('id').single();
+      if (error) { setLoading(false); return setMessage(error.message); }
       customerId = newCustomer.id;
     }
 
-    const status =
-      paid === billTotal ? 'paid' : paid > 0 ? 'partial' : 'udhaar';
-    const { data: order, error: orderError } = await supabase
-      .from('orders')
-      .insert([
-        {
-          customer_name: customerName.trim(),
-          phone: phone.trim(),
-          address: address.trim(),
-          total: billTotal,
-          status,
-          customer_id: customerId,
-          due_date: paid < billTotal ? dueDate : null,
-        },
-      ])
-      .select('id')
-      .single();
-    if (orderError) {
+    // Purane bill ka customer aur naya bill wala customer aik hi hona chahiye.
+    if (returnItems.length && returnBill?.customer_id && String(returnBill.customer_id) !== String(customerId)) {
       setLoading(false);
-      return setMessage(orderError.message);
+      return setMessage('Return wala purana bill isi customer ka hona chahiye. Customer ka mobile number/name check karein.');
     }
+
+    let creditRows = [];
+    let creditApplied = 0;
+    if (payableTotal > 0) {
+      const { data: credits, error: creditError } = await supabase.from('customer_credits').select('*').eq('customer_id', customerId).gt('remaining_amount', 0).order('created_at', { ascending: true });
+      if (creditError) { setLoading(false); return setMessage('Customer credit check nahi ho saka: ' + creditError.message); }
+      let remainingToApply = payableTotal;
+      for (const credit of credits || []) {
+        if (remainingToApply <= 0) break;
+        const use = Math.min(Number(credit.remaining_amount || 0), remainingToApply);
+        if (use > 0) { creditRows.push({ id: credit.id, old: Number(credit.remaining_amount), use }); creditApplied += use; remainingToApply -= use; }
+      }
+    }
+    const finalPayable = Math.max(0, payableTotal - creditApplied);
+    if (paid > finalPayable) { setLoading(false); return setMessage(`Customer credit ${money(creditApplied)} adjust hone ke baad paid amount ${money(finalPayable)} se zyada nahi ho sakti.`); }
+    if (finalPayable > paid && !dueDate) { setLoading(false); return setMessage('Baqi udhaar ki wapsi ki date select karein.'); }
+
+    const status = paid === finalPayable ? 'paid' : paid > 0 ? 'partial' : 'udhaar';
+    const { data: order, error: orderError } = await supabase.from('orders').insert([{
+      customer_name: customerName.trim(), phone: phone.trim(), address: address.trim(),
+      total: finalPayable, status, customer_id: customerId, due_date: finalPayable > paid ? dueDate : null,
+    }]).select('id').single();
+    if (orderError) { setLoading(false); return setMessage(orderError.message); }
 
     const insertedItems = [];
     for (const item of cart) {
-      const { data, error } = await supabase
-        .from('order_items')
-        .insert([
-          {
-            order_id: order.id,
-            product_id: item.product_id,
-            quantity: item.quantity,
-            price: item.price,
-            buy_price: item.buy_price,
-          },
-        ])
-        .select('id')
-        .single();
+      const { data, error } = await supabase.from('order_items').insert([{
+        order_id: order.id, product_id: item.product_id, quantity: item.quantity, price: item.price, buy_price: item.buy_price,
+      }]).select('id').single();
       if (error) {
-        for (const saved of insertedItems)
-          await supabase.from('order_items').delete().eq('id', saved.id);
+        for (const saved of insertedItems) await supabase.from('order_items').delete().eq('id', saved.id);
         await supabase.from('orders').delete().eq('id', order.id);
-        setLoading(false);
-        return setMessage(error.message);
+        setLoading(false); return setMessage(error.message);
       }
       insertedItems.push(data);
     }
 
     if (paid > 0) {
-      const { error } = await supabase.from('payments').insert([
-        {
-          customer_id: customerId,
-          order_id: order.id,
-          amount: paid,
-          payment_method: paymentMethod,
-          note: 'Bill payment',
-        },
-      ]);
-      if (error) {
-        for (const saved of insertedItems)
-          await supabase.from('order_items').delete().eq('id', saved.id);
-        await supabase.from('orders').delete().eq('id', order.id);
-        setLoading(false);
-        return setMessage('Payment save nahi hui: ' + error.message);
-      }
+      const { error } = await supabase.from('payments').insert([{ customer_id: customerId, order_id: order.id, amount: paid, payment_method: paymentMethod, note: 'Bill payment' }]);
+      if (error) { for (const saved of insertedItems) await supabase.from('order_items').delete().eq('id', saved.id); await supabase.from('orders').delete().eq('id', order.id); setLoading(false); return setMessage('Payment save nahi hui: ' + error.message); }
     }
 
-    const deducted = [];
+    // Apply previously deposited customer credit.
+    for (const credit of creditRows) {
+      const { error } = await supabase.from('customer_credits').update({ remaining_amount: credit.old - credit.use }).eq('id', credit.id);
+      if (error) { setLoading(false); return setMessage('Bill save ho gaya lekin customer credit adjust nahi hua: ' + error.message); }
+    }
+
+    // Update stock for sold and returned items.
+    const stockChanges = [];
     for (const old of stockBefore) {
-      const { error } = await supabase
-        .from('products')
-        .update({ stock: old.stock - old.quantity })
-        .eq('id', old.id);
-      if (error) {
-        for (const done of deducted)
-          await supabase
-            .from('products')
-            .update({ stock: done.stock })
-            .eq('id', done.id);
-        for (const saved of insertedItems)
-          await supabase.from('order_items').delete().eq('id', saved.id);
-        await supabase.from('payments').delete().eq('order_id', order.id);
-        await supabase.from('orders').delete().eq('id', order.id);
-        setLoading(false);
-        return setMessage(
-          'Stock update nahi hua, bill cancel kar diya gaya: ' + error.message
-        );
-      }
-      deducted.push(old);
+      const { error } = await supabase.from('products').update({ stock: old.stock - old.quantity }).eq('id', old.id);
+      if (error) { setLoading(false); return setMessage('Bill save ho gaya lekin sale stock update mein error: ' + error.message); }
+      stockChanges.push({ id: old.id, before: old.stock });
+    }
+    for (const ret of returnItems) {
+      const product = products.find((p) => String(p.id) === String(ret.product_id));
+      if (!product) continue;
+      const { data: current, error: currentError } = await supabase.from('products').select('stock').eq('id', ret.product_id).single();
+      if (currentError) { setLoading(false); return setMessage('Return stock check error: ' + currentError.message); }
+      const { error } = await supabase.from('products').update({ stock: Number(current.stock || 0) + ret.quantity }).eq('id', ret.product_id);
+      if (error) { setLoading(false); return setMessage('Return stock update error: ' + error.message); }
     }
 
-    const billInfo = {
-      id: order.id,
-      customer_name: customerName.trim(),
-      phone: phone.trim(),
-      total: billTotal,
-    };
-    const itemsForPdf = [...cart];
-    downloadBillPdf(
-      billInfo,
-      itemsForPdf,
-      paid,
-      paid < billTotal ? dueDate : ''
-    );
+    const savedReturnIds = [];
+    for (const ret of returnItems) {
+      const { data: savedReturn, error } = await supabase.from('order_returns').insert([{
+        order_id: ret.old_order_id, new_bill_id: order.id, customer_id: customerId,
+        product_id: ret.product_id, product_name: ret.name, quantity: ret.quantity,
+        price: ret.price, refund_method: extraRefund > 0 ? returnMethod : 'adjusted_in_bill',
+      }]).select('id').single();
+      if (error) { setLoading(false); return setMessage('Bill save ho gaya lekin return record save nahi hua: ' + error.message); }
+      savedReturnIds.push(savedReturn.id);
+    }
+
+    if (extraRefund > 0 && returnMethod === 'credit') {
+      const { error } = await supabase.from('customer_credits').insert([{
+        customer_id: customerId, amount: extraRefund, remaining_amount: extraRefund,
+        source_return_id: savedReturnIds[0] || null,
+      }]);
+      if (error) { setLoading(false); return setMessage('Return save ho gaya lekin customer credit save nahi hua: ' + error.message); }
+    }
+
+    const billInfo = { id: order.id, customer_name: customerName.trim(), phone: phone.trim(), total: finalPayable, refund_amount: extraRefund, refund_method: returnMethod, credit_applied: creditApplied };
+    downloadBillPdf(billInfo, [...cart], paid, finalPayable > paid ? dueDate : '', [...returnItems]);
     setLoading(false);
-    await Promise.all([
-      loadProducts(),
-      loadDueReminders(),
-      loadProfitReports(),
-    ]);
-    setCart([]);
-    setCustomerName('');
-    setPhone('');
-    setAddress('');
-    setPaidAmount('0');
-    setDueDate('');
-    setMessage(
-      `Bill successfully save ho gaya! Bill number: ${order.id}. PDF download shuru ho gaya.`
-    );
+    await Promise.all([loadProducts(), loadDueReminders(), loadProfitReports(), loadTopSelling(), loadReturnReports()]);
+    setCart([]); setReturnItems([]); setReturnBill(null); setReturnableItems([]); setReturnBillNumber('');
+    setCustomerName(''); setPhone(''); setAddress(''); setPaidAmount('0'); setDueDate('');
+    setMessage(`Bill successfully save ho gaya! Bill number: ${order.id}. Return: ${money(returnTotal)}. ${creditApplied > 0 ? `Customer credit adjust: ${money(creditApplied)}. ` : ''}${extraRefund > 0 ? (returnMethod === 'cash' ? `Cash refund: ${money(extraRefund)}.` : `Customer ke udhar/account mein jama: ${money(extraRefund)}.`) : ''} PDF download shuru ho gaya.`);
   };
 
   const exportBackup = async () => {
@@ -1103,6 +1167,8 @@ const downloadBillPdf = (bill, items, paid, due) => {
       'item_requests',
       'shop_state',
       'expenses',
+      'order_returns',
+      'customer_credits',
     ];
     const backup = {
       app: 'Bhutta Shoes and Plastic Store',
@@ -1159,6 +1225,8 @@ const downloadBillPdf = (bill, items, paid, due) => {
         'item_requests',
         'shop_state',
         'expenses',
+        'order_returns',
+        'customer_credits',
       ];
       for (const table of order) {
         const rows = backup.tables[table];
@@ -1260,9 +1328,9 @@ const downloadBillPdf = (bill, items, paid, due) => {
           {[
             ['dashboard', 'Dashboard'], ['bill', 'New Bill'], ['products', 'Products'],
             ['customers', 'Customers'], ['udhar', 'Udhaar'], ['stock', 'Stock'],
-            ['profits', 'Reports'], ['expenses', 'Expenses'], ['itemRequests', 'Item Requests']
+            ['profits', 'Reports'], ['savedBills', 'Saved Bills'], ['returnReports', 'Return Reports'], ['expenses', 'Expenses'], ['itemRequests', 'Item Requests']
           ].map(([key, label]) => (
-            <button key={key} style={page === key ? styles.navActive : styles.navButton} onClick={() => { setPage(key); setMessage(''); if (key === 'products') openProducts(); if (key === 'customers') openCustomers(); if (key === 'udhar') openUdhar(); if (key === 'stock') openStock(); if (key === 'expenses') openExpenses(); if (key === 'itemRequests') openItemRequests(); if (key === 'profits') openProfitReports(); if (key === 'bill') openBill(); }}>
+            <button key={key} style={page === key ? styles.navActive : styles.navButton} onClick={() => { setPage(key); setMessage(''); if (key === 'products') openProducts(); if (key === 'customers') openCustomers(); if (key === 'udhar') openUdhar(); if (key === 'stock') openStock(); if (key === 'expenses') openExpenses(); if (key === 'itemRequests') openItemRequests(); if (key === 'profits') openProfitReports(); if (key === 'savedBills') openSavedBills(); if (key === 'returnReports') openReturnReports(); if (key === 'bill') openBill(); }}>
               {label}
             </button>
           ))}
@@ -1588,6 +1656,29 @@ const downloadBillPdf = (bill, items, paid, due) => {
         </>
       )}
 
+      {page === 'savedBills' && (
+        <>
+          <h3>Saved Bills</h3>
+          <button style={styles.green} onClick={loadSavedBills}>Refresh Bills</button>
+          {selectedSavedBill ? <div style={styles.box}>
+            <button style={styles.gray} onClick={() => setSelectedSavedBill(null)}>Back to Bills</button>
+            <h3>Bill #{selectedSavedBill.id}</h3><p>Customer: {selectedSavedBill.customer_name || '-'}</p><p>Mobile: {selectedSavedBill.phone || '-'}</p><p>Date: {new Date(selectedSavedBill.created_at).toLocaleString()}</p>
+            {(selectedSavedBill.items || []).map((item, i) => <p key={i}>{item.name || `Product #${item.product_id}`} — {item.quantity} x {money(item.price)} = {money(item.quantity * item.price)}</p>)}
+            <h3>Total: {money(selectedSavedBill.total)}</h3>
+          </div> : savedBills.map((bill) => <div key={bill.id} style={styles.product}><b>Bill #{bill.id}</b><p>{bill.customer_name || '-'} | {bill.phone || '-'}</p><p>{new Date(bill.created_at).toLocaleString()}</p><b>{money(bill.total)}</b><br/><button style={styles.green} onClick={async () => { const { data, error } = await supabase.from('order_items').select('*').eq('order_id', bill.id); if (error) return setMessage(error.message); const items = await Promise.all((data || []).map(async (it) => { const p = products.find((x) => String(x.id) === String(it.product_id)); return { ...it, name: p?.name || `Product #${it.product_id}` }; })); setSelectedSavedBill({ ...bill, items }); }}>View Bill</button></div>)}
+          <p>{message}</p>
+        </>
+      )}
+
+      {page === 'returnReports' && (
+        <>
+          <h3>Product Return Reports</h3>
+          <button style={styles.green} onClick={loadReturnReports}>Refresh Returns</button>
+          <select style={styles.input} value={returnPeriod} onChange={(e) => setReturnPeriod(e.target.value)}><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option><option value="year">Yearly</option><option value="all">All Records</option></select>
+          {(() => { const now = new Date(); const rows = returnRows.filter((r) => { const d = new Date(r.created_at); if (returnPeriod === 'all') return true; if (returnPeriod === 'day') return d.toDateString() === now.toDateString(); if (returnPeriod === 'week') { const start = new Date(now); start.setDate(now.getDate() - 7); return d >= start; } if (returnPeriod === 'month') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); return d.getFullYear() === now.getFullYear(); }); return <><div style={styles.box}><h3>Total Returned: {rows.reduce((s, r) => s + Number(r.quantity || 0), 0)} items</h3><h3>Return Amount: {money(rows.reduce((s, r) => s + Number(r.quantity || 0) * Number(r.price || 0), 0))}</h3></div>{rows.map((r) => <div key={r.id} style={styles.product}><b>{r.product_name}</b><p>Old Bill: #{r.order_id} | New Bill: #{r.new_bill_id || '-'}</p><p>Customer: {r.customers?.name || (r.customer_id ? `Customer #${r.customer_id}` : '-')}</p><p>Quantity: {r.quantity} | Amount: {money(Number(r.quantity) * Number(r.price))}</p><p>Date: {new Date(r.created_at).toLocaleString()}</p><p>Refund: {r.refund_method || '-'}</p></div>)}</>; })()}
+        </>
+      )}
+
       {page === 'expenses' && (
         <>
           <h3>Expenses Record</h3>
@@ -1708,6 +1799,16 @@ const downloadBillPdf = (bill, items, paid, due) => {
       {page === 'products' && (
         <>
           <h3>Products Management</h3>
+          <div style={styles.statsGrid}>
+            <div style={styles.statCard}><span>Total Products</span><strong>{products.length}</strong></div>
+            <div style={styles.statCard}><span>Total Stock Value</span><strong>{money(products.reduce((sum, p) => sum + Number(p.stock || 0) * Number(p.buy_price || 0), 0))}</strong></div>
+            <div style={styles.statCard}><span>Best Selling Item</span><strong>{topSelling[0]?.name || 'Abhi sale nahi'}</strong></div>
+            <div style={styles.statCard}><span>Low Stock Items</span><strong>{lowStockProducts.length}</strong></div>
+          </div>
+          <div style={styles.box}>
+            <div style={styles.sectionHeading}><h3 style={{margin:0}}>Top Selling Products</h3><button style={styles.gray} onClick={loadTopSelling}>Refresh</button></div>
+            {topSelling.length ? topSelling.map((item) => <p key={item.product_id}><b>{item.name}</b> — {item.quantity} sold</p>) : <p>Abhi sales record mojood nahi.</p>}
+          </div>
           <div style={styles.box}>
             <h3>{editingId ? 'Edit Product' : 'Add New Product'}</h3>
             <input
@@ -1855,6 +1956,22 @@ const downloadBillPdf = (bill, items, paid, due) => {
             <p>Selected Due Date: {dueDate || 'Abhi date select nahi hui'}</p>
           </div>
           <div style={styles.box}>
+            <h3>Purane Bill ka Return</h3>
+            <p>Customer ka purana bill number likh kar search karein. Return ki raqam naye bill se minus hogi.</p>
+            <input style={styles.input} type="number" min="1" placeholder="Purana Bill Number" value={returnBillNumber} onChange={(e) => setReturnBillNumber(e.target.value)} />
+            <button style={styles.gray} onClick={searchOldBillForReturn} disabled={loading}>Purana Bill Search Karein</button>
+            {returnBill && <><p><b>Bill #{returnBill.id}</b> — {returnBill.customer_name || '-'} — {returnBill.phone || '-'}</p>
+              {returnableItems.map((item) => <div key={item.product_id} style={styles.product}>
+                <b>{item.name}</b><p>Original Qty: {item.original_quantity} | Pehle Return: {item.returned_quantity} | Ab Return ho sakti: {item.available_quantity}</p><p>Original Rate: {money(item.price)}</p>
+                <button style={styles.green} onClick={() => addReturnItem(item.product_id, 1)}>1 Return Karein</button>
+                <input style={styles.input} type="number" min="1" max={item.available_quantity} placeholder="Return Quantity" onBlur={(e) => { if (e.target.value) addReturnItem(item.product_id, e.target.value); }} />
+              </div>)}
+            </>}
+            {returnItems.map((item, index) => <p key={index}>{item.name}: {item.quantity} x {money(item.price)} = {money(item.quantity * item.price)} <button style={styles.red} onClick={() => setReturnItems((old) => old.filter((_, i) => i !== index))}>Remove Return</button></p>)}
+            <b>Total Return: {money(returnTotal)}</b>
+            {extraRefund > 0 && <><h4>Extra Return Amount: {money(extraRefund)}</h4><p>Extra paisay ka tareeqa select karein:</p><select style={styles.input} value={returnMethod} onChange={(e) => setReturnMethod(e.target.value)}><option value="cash">Cash Wapas Dein</option><option value="credit">Customer ke Udhar/Account Mein Jama Karein</option></select></>}
+          </div>
+          <div style={styles.box}>
             <h3>Add Product to Bill</h3>
             <input
               style={styles.input}
@@ -1930,7 +2047,10 @@ const downloadBillPdf = (bill, items, paid, due) => {
             </div>
           ))}
           <div style={styles.box}>
-            <h3>Total Bill: {money(billTotal)}</h3>
+            <p>Sale Subtotal: {money(salesSubtotal)}</p>
+            <p>Return Minus: - {money(returnTotal)}</p>
+            <h3>Net Bill Total: {money(payableTotal)}</h3>
+            {extraRefund > 0 && <p>Customer ko wapas dene / account mein jama: {money(extraRefund)}</p>}
             <label>Paid Amount (PKR)</label>
             <input
               style={styles.input}
