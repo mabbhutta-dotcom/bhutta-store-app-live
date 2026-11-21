@@ -17,6 +17,24 @@ export default function App() {
   const [dueReminders, setDueReminders] = useState([]);
   const [itemRequests, setItemRequests] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [purchaseRows, setPurchaseRows] = useState([]);
+  const [purchaseSelectedItems, setPurchaseSelectedItems] = useState([]);
+  const [purchaseItems, setPurchaseItems] = useState([]);
+  const [purchaseSupplier, setPurchaseSupplier] = useState('');
+  const [purchasePhone, setPurchasePhone] = useState('');
+  const [purchaseDate, setPurchaseDate] = useState(getToday());
+  const [purchaseNote, setPurchaseNote] = useState('');
+  const [purchaseInvoice, setPurchaseInvoice] = useState(null);
+  const [purchaseProductId, setPurchaseProductId] = useState('');
+  const [purchaseNewProductName, setPurchaseNewProductName] = useState('');
+  const [purchaseQty, setPurchaseQty] = useState('1');
+  const [purchaseRate, setPurchaseRate] = useState('');
+  const [purchaseCart, setPurchaseCart] = useState([]);
+  const [purchasePeriod, setPurchasePeriod] = useState('month');
+  const [salesPeriod, setSalesPeriod] = useState('month');
+  const [stockPeriod, setStockPeriod] = useState('month');
+  const [stockRecords, setStockRecords] = useState([]);
+  const [stockRecordItems, setStockRecordItems] = useState([]);
   const [topSelling, setTopSelling] = useState([]);
   const [savedBills, setSavedBills] = useState([]);
   const [selectedSavedBill, setSelectedSavedBill] = useState(null);
@@ -80,7 +98,10 @@ export default function App() {
     (sum, item) => sum + item.quantity * item.price,
     0
   );
-  const returnTotal = returnItems.reduce((sum, item) => sum + item.quantity * item.price, 0);
+  const returnTotal = returnItems.reduce(
+    (sum, item) => sum + item.quantity * item.price,
+    0
+  );
   const billTotal = salesSubtotal - returnTotal;
   const payableTotal = Math.max(0, billTotal);
   const extraRefund = Math.max(0, -billTotal);
@@ -146,6 +167,20 @@ export default function App() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'expenses' },
         loadExpenses
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'purchases' },
+        () => {
+          if (page === 'purchases') loadPurchases();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'stock_records' },
+        () => {
+          if (page === 'stock') loadStockRecords();
+        }
       )
       .on(
         'postgres_changes',
@@ -274,6 +309,28 @@ export default function App() {
     if (error) setMessage(error.message);
     else setExpenses(data || []);
   };
+  const loadPurchases = async () => {
+    const { data, error } = await supabase
+      .from('purchases')
+      .select('*')
+      .order('purchase_date', { ascending: false })
+      .order('id', { ascending: false });
+    if (error)
+      return setMessage('Purchase records load nahi huay: ' + error.message);
+    setPurchaseRows(data || []);
+  };
+
+  const loadStockRecords = async () => {
+    const { data, error } = await supabase
+      .from('stock_records')
+      .select('*')
+      .order('record_date', { ascending: false })
+      .order('id', { ascending: false });
+    if (error)
+      return setMessage('Stock records load nahi huay: ' + error.message);
+    setStockRecords(data || []);
+  };
+
   const loadItemRequests = async () => {
     const { data, error } = await supabase
       .from('item_requests')
@@ -296,7 +353,14 @@ export default function App() {
   const openStock = async () => {
     setPage('stock');
     setMessage('');
-    await loadProducts();
+    await Promise.all([loadProducts(), loadStockRecords()]);
+    await ensureTodayOpeningStock();
+  };
+  const openPurchases = async () => {
+    setPage('purchases');
+    setMessage('');
+    setPurchaseCart([]);
+    await Promise.all([loadProducts(), loadPurchases()]);
   };
   const openExpenses = async () => {
     setPage('expenses');
@@ -326,13 +390,29 @@ export default function App() {
       return setMessage('Tamam zaroori details fill karein.');
     if (Number(buyPrice) < 0 || Number(stock) < 0)
       return setMessage('Price aur stock negative nahi ho sakte.');
-    let imageUrl = editingId ? products.find((p) => String(p.id) === String(editingId))?.image_url || null : null;
+    let imageUrl = editingId
+      ? products.find((p) => String(p.id) === String(editingId))?.image_url ||
+        null
+      : null;
     if (productImage) {
-      const extension = (productImage.name.split('.').pop() || 'jpg').toLowerCase();
-      const filePath = `products/${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`;
-      const { error: uploadError } = await supabase.storage.from('product-images').upload(filePath, productImage, { upsert: true, contentType: productImage.type || 'image/jpeg' });
-      if (uploadError) { setLoading(false); return setMessage('Picture upload nahi hui: ' + uploadError.message); }
-      imageUrl = supabase.storage.from('product-images').getPublicUrl(filePath).data.publicUrl;
+      const extension = (
+        productImage.name.split('.').pop() || 'jpg'
+      ).toLowerCase();
+      const filePath = `products/${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}.${extension}`;
+      const { error: uploadError } = await supabase.storage
+        .from('product-images')
+        .upload(filePath, productImage, {
+          upsert: true,
+          contentType: productImage.type || 'image/jpeg',
+        });
+      if (uploadError) {
+        setLoading(false);
+        return setMessage('Picture upload nahi hui: ' + uploadError.message);
+      }
+      imageUrl = supabase.storage.from('product-images').getPublicUrl(filePath)
+        .data.publicUrl;
     }
     const product = {
       name: name.trim(),
@@ -376,6 +456,368 @@ export default function App() {
       setMessage('Product delete ho gaya.');
     }
   };
+
+  const addPurchaseItem = () => {
+    const qty = Number(purchaseQty);
+    const rate = Number(purchaseRate);
+    const selectedExisting = products.find(
+      (p) => String(p.id) === String(purchaseProductId)
+    );
+    const typedName = purchaseNewProductName.trim();
+    const existing =
+      selectedExisting ||
+      (typedName
+        ? products.find(
+            (p) =>
+              (p.name || '').trim().toLowerCase() === typedName.toLowerCase()
+          )
+        : null);
+    const productName = existing?.name || typedName;
+    if (!productName)
+      return setMessage(
+        'Product select karein ya naye product ka naam likhein.'
+      );
+    if (
+      !Number.isInteger(qty) ||
+      qty <= 0 ||
+      purchaseRate === '' ||
+      !Number.isFinite(rate) ||
+      rate < 0
+    )
+      return setMessage('Quantity aur purchase rate theek likhein.');
+    setPurchaseCart((old) => [
+      ...old,
+      {
+        product_id: existing?.id || null,
+        product_name: productName,
+        quantity: qty,
+        purchase_rate: rate,
+        total: qty * rate,
+      },
+    ]);
+    setPurchaseProductId('');
+    setPurchaseNewProductName('');
+    setPurchaseQty('1');
+    setPurchaseRate('');
+    setMessage('Purchase item list mein add ho gayi.');
+  };
+
+  const savePurchase = async () => {
+    if (!purchaseCart.length)
+      return setMessage('Purchase mein kam az kam aik item add karein.');
+    setLoading(true);
+    setMessage('');
+    let invoiceUrl = null;
+    if (purchaseInvoice) {
+      const ext = (
+        purchaseInvoice.name.split('.').pop() || 'jpg'
+      ).toLowerCase();
+      const path = `invoices/${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}.${ext}`;
+      const { error: uploadError } = await supabase.storage
+        .from('purchase-invoices')
+        .upload(path, purchaseInvoice, {
+          upsert: false,
+          contentType: purchaseInvoice.type || 'image/jpeg',
+        });
+      if (uploadError) {
+        setLoading(false);
+        return setMessage('Invoice upload nahi hui: ' + uploadError.message);
+      }
+      invoiceUrl = supabase.storage.from('purchase-invoices').getPublicUrl(path)
+        .data.publicUrl;
+    }
+    const total = purchaseCart.reduce(
+      (sum, item) => sum + Number(item.total || 0),
+      0
+    );
+    const { data: purchase, error: purchaseError } = await supabase
+      .from('purchases')
+      .insert([
+        {
+          supplier_name: purchaseSupplier.trim() || null,
+          supplier_phone: purchasePhone.trim() || null,
+          purchase_date: purchaseDate || getToday(),
+          invoice_image_url: invoiceUrl,
+          total_amount: total,
+          note: purchaseNote.trim() || null,
+        },
+      ])
+      .select('id')
+      .single();
+    if (purchaseError) {
+      setLoading(false);
+      return setMessage('Purchase save nahi hui: ' + purchaseError.message);
+    }
+
+    for (const item of purchaseCart) {
+      let productId = item.product_id;
+      if (productId) {
+        const { data: product, error: productError } = await supabase
+          .from('products')
+          .select('id, stock')
+          .eq('id', productId)
+          .single();
+        if (productError) {
+          setLoading(false);
+          return setMessage(
+            'Product stock check error: ' + productError.message
+          );
+        }
+        const { error: updateError } = await supabase
+          .from('products')
+          .update({
+            stock: Number(product.stock || 0) + item.quantity,
+            buy_price: item.purchase_rate,
+          })
+          .eq('id', productId);
+        if (updateError) {
+          setLoading(false);
+          return setMessage(
+            'Purchase save hui lekin stock update nahi hua: ' +
+              updateError.message
+          );
+        }
+      } else {
+        const { data: created, error: createError } = await supabase
+          .from('products')
+          .insert([
+            {
+              name: item.product_name,
+              price: 0,
+              buy_price: item.purchase_rate,
+              stock: item.quantity,
+              is_active: true,
+            },
+          ])
+          .select('id')
+          .single();
+        if (createError) {
+          setLoading(false);
+          return setMessage(
+            'Naya product create nahi hua: ' + createError.message
+          );
+        }
+        productId = created.id;
+      }
+      const { error: itemError } = await supabase
+        .from('purchase_items')
+        .insert([
+          {
+            purchase_id: purchase.id,
+            product_id: productId,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            purchase_rate: item.purchase_rate,
+            total: item.total,
+          },
+        ]);
+      if (itemError) {
+        setLoading(false);
+        return setMessage('Purchase item save nahi hui: ' + itemError.message);
+      }
+    }
+    setPurchaseCart([]);
+    setPurchaseSupplier('');
+    setPurchasePhone('');
+    setPurchaseNote('');
+    setPurchaseInvoice(null);
+    setPurchaseDate(getToday());
+    setLoading(false);
+    await Promise.all([loadProducts(), loadPurchases()]);
+    setMessage('Purchase successfully save ho gayi aur stock update ho gaya.');
+  };
+
+  const saveStockSnapshot = async (type) => {
+    setLoading(true);
+    const today = getToday();
+    let snapshotProducts = products;
+    if (type === 'opening') {
+      const { data: previous, error: previousError } = await supabase
+        .from('stock_records')
+        .select('id, record_date')
+        .eq('record_type', 'closing')
+        .lt('record_date', today)
+        .order('record_date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (previousError) {
+        setLoading(false);
+        return setMessage(previousError.message);
+      }
+      if (previous) {
+        const { data: previousItems, error: itemError } = await supabase
+          .from('stock_record_items')
+          .select('*')
+          .eq('stock_record_id', previous.id);
+        if (itemError) {
+          setLoading(false);
+          return setMessage(itemError.message);
+        }
+        snapshotProducts = (previousItems || []).map((row) => ({
+          id: row.product_id,
+          name: row.product_name,
+          stock: row.quantity,
+          buy_price: row.purchase_rate,
+        }));
+      }
+    }
+    const totalValue = snapshotProducts.reduce(
+      (sum, p) => sum + Number(p.stock || 0) * Number(p.buy_price || 0),
+      0
+    );
+    const { data: record, error } = await supabase
+      .from('stock_records')
+      .upsert(
+        [
+          {
+            record_date: today,
+            record_type: type,
+            total_value: totalValue,
+          },
+        ],
+        { onConflict: 'record_date,record_type' }
+      )
+      .select('id')
+      .single();
+    if (error) {
+      setLoading(false);
+      return setMessage(error.message);
+    }
+    const { error: deleteError } = await supabase
+      .from('stock_record_items')
+      .delete()
+      .eq('stock_record_id', record.id);
+    if (deleteError) {
+      setLoading(false);
+      return setMessage(deleteError.message);
+    }
+    const rows = snapshotProducts.map((p) => ({
+      stock_record_id: record.id,
+      product_id: p.id || null,
+      product_name: p.name,
+      quantity: Number(p.stock || 0),
+      purchase_rate: Number(p.buy_price || 0),
+      total_value: Number(p.stock || 0) * Number(p.buy_price || 0),
+    }));
+    if (rows.length) {
+      const { error: insertError } = await supabase
+        .from('stock_record_items')
+        .insert(rows);
+      if (insertError) {
+        setLoading(false);
+        return setMessage(insertError.message);
+      }
+    }
+    setLoading(false);
+    await loadStockRecords();
+    setMessage(
+      type === 'opening'
+        ? 'Aaj ka opening stock record save ho gaya.'
+        : 'Aaj ka closing stock save ho gaya.'
+    );
+  };
+
+  const ensureTodayOpeningStock = async () => {
+    const today = getToday();
+    const { data: existing, error: existingError } = await supabase
+      .from('stock_records')
+      .select('id')
+      .eq('record_date', today)
+      .eq('record_type', 'opening')
+      .maybeSingle();
+    if (existingError) return setMessage(existingError.message);
+    if (existing) return;
+    const { data: previous } = await supabase
+      .from('stock_records')
+      .select('id')
+      .eq('record_type', 'closing')
+      .lt('record_date', today)
+      .order('record_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    let rows = [];
+    if (previous) {
+      const { data, error } = await supabase
+        .from('stock_record_items')
+        .select('*')
+        .eq('stock_record_id', previous.id);
+      if (error) return setMessage(error.message);
+      rows = (data || []).map((row) => ({
+        product_id: row.product_id,
+        product_name: row.product_name,
+        quantity: Number(row.quantity || 0),
+        purchase_rate: Number(row.purchase_rate || 0),
+        total_value: Number(row.total_value || 0),
+      }));
+    } else {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, name, stock, buy_price');
+      if (error) return setMessage(error.message);
+      rows = (data || []).map((p) => ({
+        product_id: p.id,
+        product_name: p.name,
+        quantity: Number(p.stock || 0),
+        purchase_rate: Number(p.buy_price || 0),
+        total_value: Number(p.stock || 0) * Number(p.buy_price || 0),
+      }));
+    }
+    const totalValue = rows.reduce((sum, row) => sum + row.total_value, 0);
+    const { data: opening, error: insertError } = await supabase
+      .from('stock_records')
+      .insert([
+        {
+          record_date: today,
+          record_type: 'opening',
+          total_value: totalValue,
+          note: previous
+            ? 'Automatically copied from previous closing stock'
+            : 'Initial opening stock',
+        },
+      ])
+      .select('id')
+      .single();
+    if (insertError) return setMessage(insertError.message);
+    if (rows.length) {
+      const { error } = await supabase
+        .from('stock_record_items')
+        .insert(rows.map((row) => ({ ...row, stock_record_id: opening.id })));
+      if (error) return setMessage(error.message);
+    }
+    await loadStockRecords();
+  };
+
+  const viewStockRecord = async (record) => {
+    const { data, error } = await supabase
+      .from('stock_record_items')
+      .select('*')
+      .eq('stock_record_id', record.id)
+      .order('product_name');
+    if (error) return setMessage(error.message);
+    setStockRecordItems(data || []);
+    setMessage(
+      `${record.record_type === 'opening' ? 'Opening' : 'Closing'} stock: ${
+        record.record_date
+      }`
+    );
+  };
+
+  const periodStart = (period) => {
+    const d = new Date();
+    if (period === 'day') d.setHours(0, 0, 0, 0);
+    else if (period === 'week') d.setDate(d.getDate() - 7);
+    else if (period === 'month') d.setMonth(d.getMonth() - 1);
+    else if (period === 'year') d.setFullYear(d.getFullYear() - 1);
+    return d;
+  };
+  const reportProfitRows =
+    salesPeriod === 'all'
+      ? profitRows
+      : profitRows.filter(
+          (r) => new Date(r.created_at) >= periodStart(salesPeriod)
+        );
 
   const loadUdharRecords = async () => {
     const { data: orders, error } = await supabase
@@ -492,29 +934,58 @@ export default function App() {
   };
 
   const loadTopSelling = async () => {
-    const [{ data, error }, { data: returns, error: returnError }] = await Promise.all([
-      supabase.from('order_items').select('product_id, quantity, products(name)'),
-      supabase.from('order_returns').select('product_id, quantity'),
-    ]);
+    const [{ data, error }, { data: returns, error: returnError }] =
+      await Promise.all([
+        supabase
+          .from('order_items')
+          .select('product_id, quantity, products(name)'),
+        supabase.from('order_returns').select('product_id, quantity'),
+      ]);
     if (error) return setMessage('Top selling report error: ' + error.message);
-    if (returnError) return setMessage('Top selling returns error: ' + returnError.message);
+    if (returnError)
+      return setMessage('Top selling returns error: ' + returnError.message);
     const returned = {};
-    (returns || []).forEach((r) => { returned[r.product_id] = (returned[r.product_id] || 0) + Number(r.quantity || 0); });
+    (returns || []).forEach((r) => {
+      returned[r.product_id] =
+        (returned[r.product_id] || 0) + Number(r.quantity || 0);
+    });
     const totals = {};
     (data || []).forEach((row) => {
       const id = row.product_id;
       if (!id) return;
-      const product = Array.isArray(row.products) ? row.products[0] : row.products;
-      if (!totals[id]) totals[id] = { product_id: id, name: product?.name || 'Deleted Product', quantity: 0 };
+      const product = Array.isArray(row.products)
+        ? row.products[0]
+        : row.products;
+      if (!totals[id])
+        totals[id] = {
+          product_id: id,
+          name: product?.name || 'Deleted Product',
+          quantity: 0,
+        };
       totals[id].quantity += Number(row.quantity || 0);
     });
-    Object.values(totals).forEach((item) => { item.quantity = Math.max(0, item.quantity - Number(returned[item.product_id] || 0)); });
-    setTopSelling(Object.values(totals).filter((item) => item.quantity > 0).sort((a, b) => b.quantity - a.quantity).slice(0, 5));
+    Object.values(totals).forEach((item) => {
+      item.quantity = Math.max(
+        0,
+        item.quantity - Number(returned[item.product_id] || 0)
+      );
+    });
+    setTopSelling(
+      Object.values(totals)
+        .filter((item) => item.quantity > 0)
+        .sort((a, b) => b.quantity - a.quantity)
+        .slice(0, 5)
+    );
   };
 
   const loadSavedBills = async () => {
-    const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(200);
-    if (error) return setMessage('Saved bills load nahi huay: ' + error.message);
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error)
+      return setMessage('Saved bills load nahi huay: ' + error.message);
     setSavedBills(data || []);
   };
 
@@ -532,26 +1003,66 @@ export default function App() {
   };
 
   const loadReturnReports = async () => {
-    const { data, error } = await supabase.from('order_returns').select('*, customers(name)').order('created_at', { ascending: false });
-    if (error) return setMessage('Return report load nahi hui: ' + error.message);
+    const { data, error } = await supabase
+      .from('order_returns')
+      .select('*, customers(name)')
+      .order('created_at', { ascending: false });
+    if (error)
+      return setMessage('Return report load nahi hui: ' + error.message);
     setReturnRows(data || []);
   };
 
   const searchOldBillForReturn = async () => {
     const id = Number(returnBillNumber);
-    if (!Number.isInteger(id) || id <= 0) return setMessage('Purane bill ka sahi number likhein.');
+    if (!Number.isInteger(id) || id <= 0)
+      return setMessage('Purane bill ka sahi number likhein.');
     setLoading(true);
-    const { data: oldBill, error } = await supabase.from('orders').select('*').eq('id', id).maybeSingle();
-    if (error || !oldBill) { setLoading(false); return setMessage(error?.message || 'Is number ka bill nahi mila.'); }
-    const { data: oldItems, error: itemError } = await supabase.from('order_items').select('*').eq('order_id', id);
-    if (itemError) { setLoading(false); return setMessage(itemError.message); }
-    const { data: priorReturns, error: returnError } = await supabase.from('order_returns').select('product_id, quantity').eq('order_id', id);
-    if (returnError) { setLoading(false); return setMessage(returnError.message); }
-    const items = (oldItems || []).map((item) => {
-      const product = products.find((p) => String(p.id) === String(item.product_id));
-      const alreadyReturned = (priorReturns || []).filter((r) => String(r.product_id) === String(item.product_id)).reduce((n, r) => n + Number(r.quantity || 0), 0);
-      return { product_id: item.product_id, name: product?.name || 'Product #' + item.product_id, original_quantity: Number(item.quantity), returned_quantity: alreadyReturned, available_quantity: Math.max(0, Number(item.quantity) - alreadyReturned), price: Number(item.price || 0) };
-    }).filter((item) => item.available_quantity > 0);
+    const { data: oldBill, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !oldBill) {
+      setLoading(false);
+      return setMessage(error?.message || 'Is number ka bill nahi mila.');
+    }
+    const { data: oldItems, error: itemError } = await supabase
+      .from('order_items')
+      .select('*')
+      .eq('order_id', id);
+    if (itemError) {
+      setLoading(false);
+      return setMessage(itemError.message);
+    }
+    const { data: priorReturns, error: returnError } = await supabase
+      .from('order_returns')
+      .select('product_id, quantity')
+      .eq('order_id', id);
+    if (returnError) {
+      setLoading(false);
+      return setMessage(returnError.message);
+    }
+    const items = (oldItems || [])
+      .map((item) => {
+        const product = products.find(
+          (p) => String(p.id) === String(item.product_id)
+        );
+        const alreadyReturned = (priorReturns || [])
+          .filter((r) => String(r.product_id) === String(item.product_id))
+          .reduce((n, r) => n + Number(r.quantity || 0), 0);
+        return {
+          product_id: item.product_id,
+          name: product?.name || 'Product #' + item.product_id,
+          original_quantity: Number(item.quantity),
+          returned_quantity: alreadyReturned,
+          available_quantity: Math.max(
+            0,
+            Number(item.quantity) - alreadyReturned
+          ),
+          price: Number(item.price || 0),
+        };
+      })
+      .filter((item) => item.available_quantity > 0);
     setReturnBill(oldBill);
     setReturnItems([]);
     setReturnSelections({});
@@ -559,60 +1070,141 @@ export default function App() {
     if (!phone.trim()) setPhone(oldBill.phone || '');
     setReturnableItems(items);
     setLoading(false);
-    setMessage(items.length ? 'Purana bill mil gaya. Wapas hone wali item select karein.' : 'Is bill ki tamam items pehle hi return ho chuki hain.');
+    setMessage(
+      items.length
+        ? 'Purana bill mil gaya. Wapas hone wali item select karein.'
+        : 'Is bill ki tamam items pehle hi return ho chuki hain.'
+    );
   };
 
   const addReturnItem = (productId, qtyValue) => {
-    const item = returnableItems.find((x) => String(x.product_id) === String(productId));
+    const item = returnableItems.find(
+      (x) => String(x.product_id) === String(productId)
+    );
     const qty = Number(qtyValue);
-    if (!item || !Number.isInteger(qty) || qty <= 0 || qty > item.available_quantity) return setMessage('Return quantity available quantity se zyada nahi ho sakti.');
+    if (
+      !item ||
+      !Number.isInteger(qty) ||
+      qty <= 0 ||
+      qty > item.available_quantity
+    )
+      return setMessage(
+        'Return quantity available quantity se zyada nahi ho sakti.'
+      );
     setReturnItems((old) => {
-      const exists = old.find((x) => String(x.product_id) === String(productId) && String(x.old_order_id) === String(returnBill.id));
-      if (exists) return old.map((x) => x === exists ? { ...x, quantity: qty } : x);
-      return [...old, { old_order_id: returnBill.id, product_id: item.product_id, name: item.name, quantity: qty, price: item.price, customer_id: returnBill.customer_id || null }];
+      const exists = old.find(
+        (x) =>
+          String(x.product_id) === String(productId) &&
+          String(x.old_order_id) === String(returnBill.id)
+      );
+      if (exists)
+        return old.map((x) => (x === exists ? { ...x, quantity: qty } : x));
+      return [
+        ...old,
+        {
+          old_order_id: returnBill.id,
+          product_id: item.product_id,
+          name: item.name,
+          quantity: qty,
+          price: item.price,
+          customer_id: returnBill.customer_id || null,
+        },
+      ];
     });
     setMessage('Return item new bill mein add ho gayi.');
   };
 
   const applySelectedReturns = () => {
     if (!returnBill) return setMessage('Pehle purana bill search karein.');
-    const selected = returnableItems.filter((item) => returnSelections[item.product_id]?.checked);
-    if (!selected.length) return setMessage('Return ke liye kam az kam aik item select karein.');
+    const selected = returnableItems.filter(
+      (item) => returnSelections[item.product_id]?.checked
+    );
+    if (!selected.length)
+      return setMessage('Return ke liye kam az kam aik item select karein.');
     const prepared = [];
     for (const item of selected) {
       const qty = Number(returnSelections[item.product_id]?.quantity || 1);
       if (!Number.isInteger(qty) || qty <= 0 || qty > item.available_quantity)
-        return setMessage(`${item.name}: return quantity 1 se ${item.available_quantity} ke darmiyan honi chahiye.`);
-      prepared.push({ old_order_id: returnBill.id, product_id: item.product_id, name: item.name, quantity: qty, price: item.price, customer_id: returnBill.customer_id || null });
+        return setMessage(
+          `${item.name}: return quantity 1 se ${item.available_quantity} ke darmiyan honi chahiye.`
+        );
+      prepared.push({
+        old_order_id: returnBill.id,
+        product_id: item.product_id,
+        name: item.name,
+        quantity: qty,
+        price: item.price,
+        customer_id: returnBill.customer_id || null,
+      });
     }
     setReturnItems((old) => {
-      const otherBills = old.filter((x) => String(x.old_order_id) !== String(returnBill.id));
+      const otherBills = old.filter(
+        (x) => String(x.old_order_id) !== String(returnBill.id)
+      );
       return [...otherBills, ...prepared];
     });
-    setMessage(`${prepared.length} return item(s) new bill mein add ho gayi hain.`);
+    setMessage(
+      `${prepared.length} return item(s) new bill mein add ho gayi hain.`
+    );
   };
 
   const addSelectedProductsToCart = () => {
-    const selected = products.filter((p) => billProductSelections[p.id]?.checked);
-    if (!selected.length) return setMessage('Bill ke liye kam az kam aik product select karein.');
+    const selected = products.filter(
+      (p) => billProductSelections[p.id]?.checked
+    );
+    if (!selected.length)
+      return setMessage('Bill ke liye kam az kam aik product select karein.');
     const additions = [];
     for (const product of selected) {
       const selection = billProductSelections[product.id] || {};
       const qty = Number(selection.quantity || 1);
-      const priceText = selection.price === undefined ? String(product.price || '') : String(selection.price);
+      const priceText =
+        selection.price === undefined || selection.price === null
+          ? String(product.price ?? '')
+          : String(selection.price).trim();
       const price = Number(priceText);
-      const already = cart.filter((i) => String(i.product_id) === String(product.id)).reduce((sum, i) => sum + Number(i.quantity || 0), 0);
-      if (!Number.isInteger(qty) || qty <= 0 || priceText === '' || !Number.isFinite(price) || price < 0)
-        return setMessage(`${product.name}: quantity aur selling price theek likhein.`);
+      const already = cart
+        .filter((i) => String(i.product_id) === String(product.id))
+        .reduce((sum, i) => sum + Number(i.quantity || 0), 0);
+      if (
+        !Number.isInteger(qty) ||
+        qty <= 0 ||
+        priceText === '' ||
+        !Number.isFinite(price) ||
+        price < 0
+      )
+        return setMessage(
+          `${product.name}: quantity aur selling price theek likhein.`
+        );
       if (already + qty > Number(product.stock || 0))
-        return setMessage(`${product.name}: itna stock available nahi. Available stock: ${Math.max(0, Number(product.stock || 0) - already)}`);
-      additions.push({ product_id: product.id, name: product.name, quantity: qty, price, buy_price: Number(product.buy_price || 0) });
+        return setMessage(
+          `${
+            product.name
+          }: itna stock available nahi. Available stock: ${Math.max(
+            0,
+            Number(product.stock || 0) - already
+          )}`
+        );
+      additions.push({
+        product_id: product.id,
+        name: product.name,
+        quantity: qty,
+        price,
+        buy_price: Number(product.buy_price || 0),
+      });
     }
     setCart((old) => {
       const next = [...old];
       additions.forEach((add) => {
-        const index = next.findIndex((item) => String(item.product_id) === String(add.product_id));
-        if (index >= 0) next[index] = { ...next[index], quantity: next[index].quantity + add.quantity, price: add.price };
+        const index = next.findIndex(
+          (item) => String(item.product_id) === String(add.product_id)
+        );
+        if (index >= 0)
+          next[index] = {
+            ...next[index],
+            quantity: next[index].quantity + add.quantity,
+            price: add.price,
+          };
         else next.push(add);
       });
       return next;
@@ -814,404 +1406,655 @@ export default function App() {
   };
   const removeCartItem = (index) => setCart(cart.filter((_, i) => i !== index));
 
- 
-const downloadBillPdf = (bill, items, paid, due, returns = []) => {
-  const doc = new jsPDF();
-  const pageWidth = 210;
-  const navy = [15, 39, 71];
-  const blue = [220, 235, 250];
-  const margin = 14;
-  let y = 15;
+  const downloadBillPdf = (
+    bill,
+    items,
+    paid,
+    due,
+    returns = [],
+    method = 'Cash'
+  ) => {
+    const doc = new jsPDF();
+    const pageWidth = 210;
+    const navy = [15, 39, 71];
+    const blue = [220, 235, 250];
+    const margin = 14;
+    let y = 15;
 
-  const subtotal = items.reduce(
-    (sum, item) =>
-      sum + Number(item.quantity) * Number(item.price),
-    0
-  );
-
-  const returnDeduction = returns.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.price || 0), 0);
-
-  const discount = Number(
-    bill.discount ?? bill.discount_amount ?? 0
-  );
-
-  const grandTotal = Number(
-    bill.total ?? subtotal - discount
-  );
-
-  const paidAmount = Number(paid || 0);
-  const remaining = grandTotal - paidAmount;
-
-  const money = (amount) =>
-    `Rs. ${Number(amount).toFixed(2)}`;
-
-  const drawHeader = () => {
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, pageWidth, 49, 'F');
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(19);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Bhutta Shoes & Plastic Store', 105, 12, {
-      align: 'center'
-    });
-
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-
-    doc.text('Muhammad Rashid Bhutta', 14, 25);
-    doc.text('Mobile: 03017623456', 14, 32);
-
-    doc.setFont('helvetica', 'bold');
-    doc.text('OWNER', 196, 23, { align: 'right' });
-
-    doc.setFont('helvetica', 'normal');
-    doc.text('Muhammad Asif Bhutta', 196, 31, {
-      align: 'right'
-    });
-    doc.text('Muhammad Sajid Bhutta', 196, 38, {
-      align: 'right'
-    });
-
-    doc.setTextColor(0, 0, 0);
-    y = 58;
-  };
-
-  const drawTableHeader = () => {
-    doc.setFillColor(...navy);
-    doc.rect(margin, y, 182, 10, 'F');
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-
-    doc.text('Item Name', 17, y + 7);
-    doc.text('Qty', 112, y + 7);
-    doc.text('Rate', 140, y + 7);
-    doc.text('Total', 190, y + 7, {
-      align: 'right'
-    });
-
-    doc.setTextColor(0, 0, 0);
-    doc.setFont('helvetica', 'normal');
-    y += 16;
-  };
-
-  const newPage = () => {
-    doc.addPage();
-    drawHeader();
-    drawTableHeader();
-  };
-
-  drawHeader();
-
-  doc.setFontSize(13);
-  doc.setFont('helvetica', 'bold');
-  doc.text('SALES INVOICE', 105, y, {
-    align: 'center'
-  });
-
-  y += 10;
-
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-
-  doc.text(`Bill Number: ${bill.id}`, 14, y);
-  doc.text(
-    `Date: ${new Date().toLocaleDateString()}`,
-    196,
-    y,
-    { align: 'right' }
-  );
-
-  y += 8;
-
-  doc.text(
-    `Customer: ${bill.customer_name || '-'}`,
-    14,
-    y
-  );
-
-  doc.text(
-    `Mobile: ${bill.phone || '-'}`,
-    196,
-    y,
-    { align: 'right' }
-  );
-
-  y += 10;
-
-  drawTableHeader();
-
-  items.forEach((item) => {
-    const itemName = doc.splitTextToSize(
-      String(item.name || '-'),
-      85
+    const subtotal = items.reduce(
+      (sum, item) => sum + Number(item.quantity) * Number(item.price),
+      0
     );
 
-    const rowHeight = Math.max(9, itemName.length * 5 + 3);
+    const returnDeduction = returns.reduce(
+      (sum, item) => sum + Number(item.quantity || 0) * Number(item.price || 0),
+      0
+    );
 
-    if (y + rowHeight > 255) {
+    const discount = Number(bill.discount ?? bill.discount_amount ?? 0);
+
+    const grandTotal = Number(bill.total ?? subtotal - discount);
+
+    const paidAmount = Number(paid || 0);
+    const remaining = grandTotal - paidAmount;
+    const paymentMethodLabel = String(method || bill.payment_method || 'Cash');
+
+    const money = (amount) => `Rs. ${Number(amount).toFixed(2)}`;
+
+    const drawHeader = () => {
+      doc.setFillColor(...navy);
+      doc.rect(0, 0, pageWidth, 49, 'F');
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(19);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Bhutta Shoes & Plastic Store', 105, 12, {
+        align: 'center',
+      });
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+
+      doc.text('Muhammad Rashid Bhutta', 14, 25);
+      doc.text('Mobile: 03017623456', 14, 32);
+
+      doc.setFont('helvetica', 'bold');
+      doc.text('OWNER', 196, 23, { align: 'right' });
+
+      doc.setFont('helvetica', 'normal');
+      doc.text('Muhammad Asif Bhutta', 196, 31, {
+        align: 'right',
+      });
+      doc.text('Muhammad Sajid Bhutta', 196, 38, {
+        align: 'right',
+      });
+
+      doc.setTextColor(0, 0, 0);
+      y = 58;
+    };
+
+    const drawTableHeader = () => {
+      doc.setFillColor(...navy);
+      doc.rect(margin, y, 182, 10, 'F');
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+
+      doc.text('Item Name', 17, y + 7);
+      doc.text('Qty', 112, y + 7);
+      doc.text('Rate', 140, y + 7);
+      doc.text('Total', 190, y + 7, {
+        align: 'right',
+      });
+
+      doc.setTextColor(0, 0, 0);
+      doc.setFont('helvetica', 'normal');
+      y += 16;
+    };
+
+    const newPage = () => {
+      doc.addPage();
+      drawHeader();
+      drawTableHeader();
+    };
+
+    drawHeader();
+
+    doc.setFontSize(13);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SALES INVOICE', 105, y, {
+      align: 'center',
+    });
+
+    y += 10;
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+
+    doc.text(`Bill Number: ${bill.id}`, 14, y);
+    doc.text(`Date: ${new Date().toLocaleDateString()}`, 196, y, {
+      align: 'right',
+    });
+
+    y += 8;
+
+    doc.text(`Customer: ${bill.customer_name || '-'}`, 14, y);
+
+    doc.text(`Mobile: ${bill.phone || '-'}`, 196, y, { align: 'right' });
+
+    y += 10;
+
+    drawTableHeader();
+
+    items.forEach((item) => {
+      const itemName = doc.splitTextToSize(String(item.name || '-'), 85);
+
+      const rowHeight = Math.max(9, itemName.length * 5 + 3);
+
+      if (y + rowHeight > 255) {
+        newPage();
+      }
+
+      doc.setFontSize(9);
+      doc.text(itemName, 17, y);
+
+      doc.text(String(item.quantity), 112, y);
+
+      doc.text(Number(item.price).toFixed(2), 140, y);
+
+      doc.text(
+        (Number(item.quantity) * Number(item.price)).toFixed(2),
+        190,
+        y,
+        { align: 'right' }
+      );
+
+      y += rowHeight;
+
+      doc.setDrawColor(220, 225, 235);
+      doc.line(14, y - 2, 196, y - 2);
+    });
+
+    if (returns.length) {
+      y += 4;
+      if (y + 12 > 255) newPage();
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(170, 45, 45);
+      doc.text('RETURNED ITEMS', 14, y + 4);
+      y += 10;
+      returns.forEach((item) => {
+        if (y + 9 > 255) newPage();
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.text(String(item.name || 'Returned item'), 17, y);
+        doc.text(String(item.quantity), 112, y);
+        doc.text(Number(item.price).toFixed(2), 140, y);
+        doc.text(
+          (Number(item.quantity) * Number(item.price)).toFixed(2),
+          190,
+          y,
+          { align: 'right' }
+        );
+        y += 8;
+      });
+      doc.setTextColor(0, 0, 0);
+    }
+
+    if (y + 110 > 275) {
       newPage();
     }
 
-    doc.setFontSize(9);
-    doc.text(itemName, 17, y);
+    y += 7;
 
-    doc.text(String(item.quantity), 112, y);
+    doc.setFillColor(...blue);
+    doc.roundedRect(105, y, 91, 78, 3, 3, 'F');
 
-    doc.text(
-      Number(item.price).toFixed(2),
-      140,
-      y
-    );
-
-    doc.text(
-      (Number(item.quantity) * Number(item.price)).toFixed(2),
-      190,
-      y,
-      { align: 'right' }
-    );
-
-    y += rowHeight;
-
-    doc.setDrawColor(220, 225, 235);
-    doc.line(14, y - 2, 196, y - 2);
-  });
-
-  if (returns.length) {
-    y += 4;
-    if (y + 12 > 255) newPage();
-    doc.setFont('helvetica', 'bold');
     doc.setFontSize(10);
-    doc.setTextColor(170, 45, 45);
-    doc.text('RETURNED ITEMS', 14, y + 4);
-    y += 10;
-    returns.forEach((item) => {
-      if (y + 9 > 255) newPage();
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-      doc.text(String(item.name || 'Returned item'), 17, y);
-      doc.text(String(item.quantity), 112, y);
-      doc.text(Number(item.price).toFixed(2), 140, y);
-      doc.text((Number(item.quantity) * Number(item.price)).toFixed(2), 190, y, { align: 'right' });
-      y += 8;
+    doc.setFont('helvetica', 'normal');
+
+    doc.text('Subtotal:', 112, y + 9);
+    doc.text(money(subtotal), 190, y + 9, {
+      align: 'right',
     });
-    doc.setTextColor(0, 0, 0);
-  }
 
-  if (y + 95 > 275) {
-    newPage();
-  }
+    doc.text('Return Deduction:', 112, y + 18);
+    doc.text(money(returnDeduction), 190, y + 18, { align: 'right' });
 
-  y += 7;
+    doc.setFont('helvetica', 'bold');
+    doc.text('Net Total:', 112, y + 29);
+    doc.text(money(grandTotal), 190, y + 29, { align: 'right' });
 
-  doc.setFillColor(...blue);
-  doc.roundedRect(105, y, 91, 68, 3, 3, 'F');
+    doc.setFont('helvetica', 'normal');
+    doc.text('Paid:', 112, y + 38);
+    doc.text(money(paidAmount), 190, y + 38, { align: 'right' });
+    doc.text('Balance:', 112, y + 48);
+    doc.text(money(remaining), 190, y + 48, { align: 'right' });
+    doc.text('Payment Method:', 112, y + 58);
+    doc.text(paymentMethodLabel, 190, y + 58, { align: 'right' });
+    if (Number(bill.refund_amount || 0) > 0) {
+      doc.text('Extra Refund:', 112, y + 68);
+      doc.text(money(bill.refund_amount), 190, y + 68, { align: 'right' });
+    }
 
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
+    y += 85;
 
-  doc.text('Subtotal:', 112, y + 9);
-  doc.text(money(subtotal), 190, y + 9, {
-    align: 'right'
-  });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(`Remaining: ${money(remaining)}`, 112, y);
 
-  doc.text('Return Deduction:', 112, y + 18);
-  doc.text(money(returnDeduction), 190, y + 18, { align: 'right' });
+    y += 9;
 
-  doc.setFont('helvetica', 'bold');
-  doc.text('Net Total:', 112, y + 29);
-  doc.text(money(grandTotal), 190, y + 29, { align: 'right' });
+    if (due) {
+      doc.setFontSize(10);
+      doc.text(`Due Date: ${due}`, 112, y);
+      y += 10;
+    }
 
-  doc.setFont('helvetica', 'normal');
-  doc.text('Paid:', 112, y + 38);
-  doc.text(money(paidAmount), 190, y + 38, { align: 'right' });
-  doc.text('Balance:', 112, y + 48);
-  doc.text(money(remaining), 190, y + 48, { align: 'right' });
-  if (Number(bill.refund_amount || 0) > 0) {
-    doc.text('Extra Refund:', 112, y + 58);
-    doc.text(money(bill.refund_amount), 190, y + 58, { align: 'right' });
-  }
+    y = Math.max(y + 25, 250);
 
-  y += 75;
+    doc.setDrawColor(...navy);
+    doc.line(18, y, 82, y);
+    doc.line(128, y, 192, y);
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.text(`Remaining: ${money(remaining)}`, 112, y);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
 
-  y += 9;
+    doc.text('Customer Signature', 50, y + 6, {
+      align: 'center',
+    });
 
-  if (due) {
-    doc.setFontSize(10);
-    doc.text(`Due Date: ${due}`, 112, y);
-    y += 10;
-  }
+    doc.text('Authorized Signature', 160, y + 6, {
+      align: 'center',
+    });
 
-  y = Math.max(y + 25, 250);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...navy);
 
-  doc.setDrawColor(...navy);
-  doc.line(18, y, 82, y);
-  doc.line(128, y, 192, y);
+    doc.text('Thank You For Shopping With Us!', 105, 282, { align: 'center' });
 
-  doc.setFontSize(9);
-  doc.setFont('helvetica', 'normal');
-
-  doc.text('Customer Signature', 50, y + 6, {
-    align: 'center'
-  });
-
-  doc.text('Authorized Signature', 160, y + 6, {
-    align: 'center'
-  });
-
-  doc.setFontSize(11);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(...navy);
-
-  doc.text(
-    'Thank You For Shopping With Us!',
-    105,
-    282,
-    { align: 'center' }
-  );
-
-  doc.save(`Bill-${bill.id}.pdf`);
-};
+    doc.save(`Bill-${bill.id}.pdf`);
+  };
 
   const saveBill = async () => {
     if (!customerName.trim()) return setMessage('Customer ka naam likhein.');
-    if (!cart.length && !returnItems.length) return setMessage('Bill mein sale ya return item zaroor honi chahiye.');
+    if (!cart.length && !returnItems.length)
+      return setMessage('Bill mein sale ya return item zaroor honi chahiye.');
     const paid = Number(paidAmount || 0);
     if (!Number.isFinite(paid) || paid < 0 || paid > payableTotal)
-      return setMessage('Paid amount payable total se zyada ya negative nahi ho sakta.');
-    if (payableTotal > paid && !dueDate) return setMessage('Udhaar ki wapsi ki date select karein.');
-    if (returnItems.length && !returnBill) return setMessage('Return ke liye purana bill search karein.');
-    if (extraRefund > 0 && !['cash', 'credit'].includes(returnMethod)) return setMessage('Refund ka tareeqa select karein.');
+      return setMessage(
+        'Paid amount payable total se zyada ya negative nahi ho sakta.'
+      );
+    if (payableTotal > paid && !dueDate)
+      return setMessage('Udhaar ki wapsi ki date select karein.');
+    if (returnItems.length && !returnBill)
+      return setMessage('Return ke liye purana bill search karein.');
+    if (extraRefund > 0 && !['cash', 'credit'].includes(returnMethod))
+      return setMessage('Refund ka tareeqa select karein.');
 
     setLoading(true);
     setMessage('');
     const stockBefore = [];
     for (const item of cart) {
-      const { data: p, error } = await supabase.from('products').select('id, stock').eq('id', item.product_id).single();
+      const { data: p, error } = await supabase
+        .from('products')
+        .select('id, stock')
+        .eq('id', item.product_id)
+        .single();
       if (error || !p || Number(p.stock) < item.quantity) {
         setLoading(false);
-        return setMessage(error?.message || `${item.name} ka stock ab ${p?.stock ?? 0} hai. Bill dobara check karein.`);
+        return setMessage(
+          error?.message ||
+            `${item.name} ka stock ab ${
+              p?.stock ?? 0
+            } hai. Bill dobara check karein.`
+        );
       }
-      stockBefore.push({ id: p.id, stock: Number(p.stock), quantity: item.quantity, name: item.name });
+      stockBefore.push({
+        id: p.id,
+        stock: Number(p.stock),
+        quantity: item.quantity,
+        name: item.name,
+      });
     }
 
     let customerId = null;
     if (phone.trim()) {
-      const { data: oldCustomer, error: findError } = await supabase.from('customers').select('id').eq('phone', phone.trim()).maybeSingle();
-      if (findError) { setLoading(false); return setMessage(findError.message); }
+      const { data: oldCustomer, error: findError } = await supabase
+        .from('customers')
+        .select('id')
+        .eq('phone', phone.trim())
+        .maybeSingle();
+      if (findError) {
+        setLoading(false);
+        return setMessage(findError.message);
+      }
       if (oldCustomer) {
         customerId = oldCustomer.id;
-        const { error: customerUpdateError } = await supabase.from('customers').update({ name: customerName.trim() }).eq('id', customerId);
-        if (customerUpdateError) { setLoading(false); return setMessage(customerUpdateError.message); }
+        const { error: customerUpdateError } = await supabase
+          .from('customers')
+          .update({ name: customerName.trim() })
+          .eq('id', customerId);
+        if (customerUpdateError) {
+          setLoading(false);
+          return setMessage(customerUpdateError.message);
+        }
       }
     }
     if (!customerId) {
-      const { data: newCustomer, error } = await supabase.from('customers').insert([{ name: customerName.trim(), phone: phone.trim() || null }]).select('id').single();
-      if (error) { setLoading(false); return setMessage(error.message); }
+      const { data: newCustomer, error } = await supabase
+        .from('customers')
+        .insert([{ name: customerName.trim(), phone: phone.trim() || null }])
+        .select('id')
+        .single();
+      if (error) {
+        setLoading(false);
+        return setMessage(error.message);
+      }
       customerId = newCustomer.id;
     }
 
     // Purane bill ka customer aur naya bill wala customer aik hi hona chahiye.
-    if (returnItems.length && returnBill?.customer_id && String(returnBill.customer_id) !== String(customerId)) {
+    if (
+      returnItems.length &&
+      returnBill?.customer_id &&
+      String(returnBill.customer_id) !== String(customerId)
+    ) {
       setLoading(false);
-      return setMessage('Return wala purana bill isi customer ka hona chahiye. Customer ka mobile number/name check karein.');
+      return setMessage(
+        'Return wala purana bill isi customer ka hona chahiye. Customer ka mobile number/name check karein.'
+      );
     }
 
     let creditRows = [];
     let creditApplied = 0;
     if (payableTotal > 0) {
-      const { data: credits, error: creditError } = await supabase.from('customer_credits').select('*').eq('customer_id', customerId).gt('remaining_amount', 0).order('created_at', { ascending: true });
-      if (creditError) { setLoading(false); return setMessage('Customer credit check nahi ho saka: ' + creditError.message); }
+      const { data: credits, error: creditError } = await supabase
+        .from('customer_credits')
+        .select('*')
+        .eq('customer_id', customerId)
+        .gt('remaining_amount', 0)
+        .order('created_at', { ascending: true });
+      if (creditError) {
+        setLoading(false);
+        return setMessage(
+          'Customer credit check nahi ho saka: ' + creditError.message
+        );
+      }
       let remainingToApply = payableTotal;
       for (const credit of credits || []) {
         if (remainingToApply <= 0) break;
-        const use = Math.min(Number(credit.remaining_amount || 0), remainingToApply);
-        if (use > 0) { creditRows.push({ id: credit.id, old: Number(credit.remaining_amount), use }); creditApplied += use; remainingToApply -= use; }
+        const use = Math.min(
+          Number(credit.remaining_amount || 0),
+          remainingToApply
+        );
+        if (use > 0) {
+          creditRows.push({
+            id: credit.id,
+            old: Number(credit.remaining_amount),
+            use,
+          });
+          creditApplied += use;
+          remainingToApply -= use;
+        }
       }
     }
     const finalPayable = Math.max(0, payableTotal - creditApplied);
-    if (paid > finalPayable) { setLoading(false); return setMessage(`Customer credit ${money(creditApplied)} adjust hone ke baad paid amount ${money(finalPayable)} se zyada nahi ho sakti.`); }
-    if (finalPayable > paid && !dueDate) { setLoading(false); return setMessage('Baqi udhaar ki wapsi ki date select karein.'); }
+    if (paid > finalPayable) {
+      setLoading(false);
+      return setMessage(
+        `Customer credit ${money(
+          creditApplied
+        )} adjust hone ke baad paid amount ${money(
+          finalPayable
+        )} se zyada nahi ho sakti.`
+      );
+    }
+    if (finalPayable > paid && !dueDate) {
+      setLoading(false);
+      return setMessage('Baqi udhaar ki wapsi ki date select karein.');
+    }
 
-    const status = paid === finalPayable ? 'paid' : paid > 0 ? 'partial' : 'udhaar';
-    const { data: order, error: orderError } = await supabase.from('orders').insert([{
-      customer_name: customerName.trim(), phone: phone.trim(), address: address.trim(),
-      total: finalPayable, status, customer_id: customerId, due_date: finalPayable > paid ? dueDate : null,
-    }]).select('id').single();
-    if (orderError) { setLoading(false); return setMessage(orderError.message); }
+    const status =
+      paid === finalPayable ? 'paid' : paid > 0 ? 'partial' : 'udhaar';
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .insert([
+        {
+          customer_name: customerName.trim(),
+          phone: phone.trim(),
+          address: address.trim(),
+          total: finalPayable,
+          status,
+          customer_id: customerId,
+          due_date: finalPayable > paid ? dueDate : null,
+        },
+      ])
+      .select('id')
+      .single();
+    if (orderError) {
+      setLoading(false);
+      return setMessage(orderError.message);
+    }
 
     const insertedItems = [];
     for (const item of cart) {
-      const { data, error } = await supabase.from('order_items').insert([{
-        order_id: order.id, product_id: item.product_id, quantity: item.quantity, price: item.price, buy_price: item.buy_price,
-      }]).select('id').single();
+      const { data, error } = await supabase
+        .from('order_items')
+        .insert([
+          {
+            order_id: order.id,
+            product_id: item.product_id,
+            quantity: item.quantity,
+            price: item.price,
+            buy_price: item.buy_price,
+          },
+        ])
+        .select('id')
+        .single();
       if (error) {
-        for (const saved of insertedItems) await supabase.from('order_items').delete().eq('id', saved.id);
+        for (const saved of insertedItems)
+          await supabase.from('order_items').delete().eq('id', saved.id);
         await supabase.from('orders').delete().eq('id', order.id);
-        setLoading(false); return setMessage(error.message);
+        setLoading(false);
+        return setMessage(error.message);
       }
       insertedItems.push(data);
     }
 
     if (paid > 0) {
-      const { error } = await supabase.from('payments').insert([{ customer_id: customerId, order_id: order.id, amount: paid, payment_method: paymentMethod, note: 'Bill payment' }]);
-      if (error) { for (const saved of insertedItems) await supabase.from('order_items').delete().eq('id', saved.id); await supabase.from('orders').delete().eq('id', order.id); setLoading(false); return setMessage('Payment save nahi hui: ' + error.message); }
+      const { error } = await supabase.from('payments').insert([
+        {
+          customer_id: customerId,
+          order_id: order.id,
+          amount: paid,
+          payment_method: paymentMethod,
+          note: 'Bill payment',
+        },
+      ]);
+      if (error) {
+        for (const saved of insertedItems)
+          await supabase.from('order_items').delete().eq('id', saved.id);
+        await supabase.from('orders').delete().eq('id', order.id);
+        setLoading(false);
+        return setMessage('Payment save nahi hui: ' + error.message);
+      }
     }
 
     // Apply previously deposited customer credit.
     for (const credit of creditRows) {
-      const { error } = await supabase.from('customer_credits').update({ remaining_amount: credit.old - credit.use }).eq('id', credit.id);
-      if (error) { setLoading(false); return setMessage('Bill save ho gaya lekin customer credit adjust nahi hua: ' + error.message); }
+      const { error } = await supabase
+        .from('customer_credits')
+        .update({ remaining_amount: credit.old - credit.use })
+        .eq('id', credit.id);
+      if (error) {
+        setLoading(false);
+        return setMessage(
+          'Bill save ho gaya lekin customer credit adjust nahi hua: ' +
+            error.message
+        );
+      }
     }
 
-    // Update stock for sold and returned items.
-    const stockChanges = [];
-    for (const old of stockBefore) {
-      const { error } = await supabase.from('products').update({ stock: old.stock - old.quantity }).eq('id', old.id);
-      if (error) { setLoading(false); return setMessage('Bill save ho gaya lekin sale stock update mein error: ' + error.message); }
-      stockChanges.push({ id: old.id, before: old.stock });
-    }
+    // Sale stock automatic_stock_update trigger se already update ho chuka hai.
+    // Yahan sirf returned items ka stock wapas add karna hai.
     for (const ret of returnItems) {
-      const product = products.find((p) => String(p.id) === String(ret.product_id));
+      const product = products.find(
+        (p) => String(p.id) === String(ret.product_id)
+      );
       if (!product) continue;
-      const { data: current, error: currentError } = await supabase.from('products').select('stock').eq('id', ret.product_id).single();
-      if (currentError) { setLoading(false); return setMessage('Return stock check error: ' + currentError.message); }
-      const { error } = await supabase.from('products').update({ stock: Number(current.stock || 0) + ret.quantity }).eq('id', ret.product_id);
-      if (error) { setLoading(false); return setMessage('Return stock update error: ' + error.message); }
+      const { data: current, error: currentError } = await supabase
+        .from('products')
+        .select('stock')
+        .eq('id', ret.product_id)
+        .single();
+      if (currentError) {
+        setLoading(false);
+        return setMessage('Return stock check error: ' + currentError.message);
+      }
+      const { error } = await supabase
+        .from('products')
+        .update({ stock: Number(current.stock || 0) + ret.quantity })
+        .eq('id', ret.product_id);
+      if (error) {
+        setLoading(false);
+        return setMessage('Return stock update error: ' + error.message);
+      }
     }
 
     const savedReturnIds = [];
     for (const ret of returnItems) {
-      const { data: savedReturn, error } = await supabase.from('order_returns').insert([{
-        order_id: ret.old_order_id, new_bill_id: order.id, customer_id: customerId,
-        product_id: ret.product_id, product_name: ret.name, quantity: ret.quantity,
-        price: ret.price, refund_method: extraRefund > 0 ? returnMethod : 'adjusted_in_bill',
-      }]).select('id').single();
-      if (error) { setLoading(false); return setMessage('Bill save ho gaya lekin return record save nahi hua: ' + error.message); }
+      const { data: savedReturn, error } = await supabase
+        .from('order_returns')
+        .insert([
+          {
+            order_id: ret.old_order_id,
+            new_bill_id: order.id,
+            customer_id: customerId,
+            product_id: ret.product_id,
+            product_name: ret.name,
+            quantity: ret.quantity,
+            price: ret.price,
+            refund_method: extraRefund > 0 ? returnMethod : 'adjusted_in_bill',
+          },
+        ])
+        .select('id')
+        .single();
+      if (error) {
+        setLoading(false);
+        return setMessage(
+          'Bill save ho gaya lekin return record save nahi hua: ' +
+            error.message
+        );
+      }
       savedReturnIds.push(savedReturn.id);
     }
 
     if (extraRefund > 0 && returnMethod === 'credit') {
-      const { error } = await supabase.from('customer_credits').insert([{
-        customer_id: customerId, amount: extraRefund, remaining_amount: extraRefund,
-        source_return_id: savedReturnIds[0] || null,
-      }]);
-      if (error) { setLoading(false); return setMessage('Return save ho gaya lekin customer credit save nahi hua: ' + error.message); }
+      const { error } = await supabase.from('customer_credits').insert([
+        {
+          customer_id: customerId,
+          amount: extraRefund,
+          remaining_amount: extraRefund,
+          source_return_id: savedReturnIds[0] || null,
+        },
+      ]);
+      if (error) {
+        setLoading(false);
+        return setMessage(
+          'Return save ho gaya lekin customer credit save nahi hua: ' +
+            error.message
+        );
+      }
     }
 
-    const billInfo = { id: order.id, customer_name: customerName.trim(), phone: phone.trim(), total: finalPayable, refund_amount: extraRefund, refund_method: returnMethod, credit_applied: creditApplied };
-    downloadBillPdf(billInfo, [...cart], paid, finalPayable > paid ? dueDate : '', [...returnItems]);
+    const billInfo = {
+      id: order.id,
+      customer_name: customerName.trim(),
+      phone: phone.trim(),
+      total: finalPayable,
+      refund_amount: extraRefund,
+      refund_method: returnMethod,
+      payment_method: paymentMethod,
+      credit_applied: creditApplied,
+    };
+    downloadBillPdf(
+      billInfo,
+      [...cart],
+      paid,
+      finalPayable > paid ? dueDate : '',
+      [...returnItems],
+      paymentMethod
+    );
     setLoading(false);
-    await Promise.all([loadProducts(), loadDueReminders(), loadProfitReports(), loadTopSelling(), loadReturnReports()]);
-    setCart([]); setReturnItems([]); setReturnBill(null); setReturnableItems([]); setReturnBillNumber(''); setReturnSelections({}); setBillProductSelections({}); setBillProductSearch('');
-    setCustomerName(''); setPhone(''); setAddress(''); setPaidAmount('0'); setDueDate('');
-    setMessage(`Bill successfully save ho gaya! Bill number: ${order.id}. Return: ${money(returnTotal)}. ${creditApplied > 0 ? `Customer credit adjust: ${money(creditApplied)}. ` : ''}${extraRefund > 0 ? (returnMethod === 'cash' ? `Cash refund: ${money(extraRefund)}.` : `Customer ke udhar/account mein jama: ${money(extraRefund)}.`) : ''} PDF download shuru ho gaya.`);
+    await Promise.all([
+      loadProducts(),
+      loadDueReminders(),
+      loadProfitReports(),
+      loadTopSelling(),
+      loadReturnReports(),
+    ]);
+    setCart([]);
+    setReturnItems([]);
+    setReturnBill(null);
+    setReturnableItems([]);
+    setReturnBillNumber('');
+    setReturnSelections({});
+    setBillProductSelections({});
+    setBillProductSearch('');
+    setCustomerName('');
+    setPhone('');
+    setAddress('');
+    setPaidAmount('0');
+    setDueDate('');
+    setMessage(
+      `Bill successfully save ho gaya! Bill number: ${
+        order.id
+      }. Return: ${money(returnTotal)}. ${
+        creditApplied > 0
+          ? `Customer credit adjust: ${money(creditApplied)}. `
+          : ''
+      }${
+        extraRefund > 0
+          ? returnMethod === 'cash'
+            ? `Cash refund: ${money(extraRefund)}.`
+            : `Customer ke udhar/account mein jama: ${money(extraRefund)}.`
+          : ''
+      } PDF download shuru ho gaya.`
+    );
+  };
+
+  const downloadPurchaseReportPdf = () => {
+    const rows = purchaseRows.filter(
+      (r) =>
+        purchasePeriod === 'all' ||
+        new Date(`${r.purchase_date}T00:00:00`) >= periodStart(purchasePeriod)
+    );
+    const doc = new jsPDF();
+    let y = 18;
+    doc.setFontSize(16);
+    doc.text('Bhutta Shoes & Plastic Store - Purchase Report', 14, y);
+    y += 10;
+    doc.setFontSize(10);
+    doc.text(
+      `Period: ${purchasePeriod.toUpperCase()} | Generated: ${new Date().toLocaleString()}`,
+      14,
+      y
+    );
+    y += 10;
+    rows.forEach((row) => {
+      if (y > 270) {
+        doc.addPage();
+        y = 18;
+      }
+      doc.setFont(undefined, 'bold');
+      doc.text(`Purchase #${row.id} | ${row.purchase_date || ''}`, 14, y);
+      y += 6;
+      doc.setFont(undefined, 'normal');
+      doc.text(
+        `Supplier: ${row.supplier_name || '-'} | Phone: ${
+          row.supplier_phone || '-'
+        }`,
+        14,
+        y
+      );
+      y += 6;
+      doc.text(`Total: Rs. ${Number(row.total_amount || 0).toFixed(2)}`, 14, y);
+      y += 9;
+    });
+    const total = rows.reduce(
+      (sum, row) => sum + Number(row.total_amount || 0),
+      0
+    );
+    if (y > 270) {
+      doc.addPage();
+      y = 18;
+    }
+    doc.setFont(undefined, 'bold');
+    doc.text(`Grand Total: Rs. ${total.toFixed(2)}`, 14, y);
+    doc.save(`Purchase-Report-${getToday()}.pdf`);
   };
 
   const exportBackup = async () => {
@@ -1228,6 +2071,10 @@ const downloadBillPdf = (bill, items, paid, due, returns = []) => {
       'expenses',
       'order_returns',
       'customer_credits',
+      'purchases',
+      'purchase_items',
+      'stock_records',
+      'stock_record_items',
     ];
     const backup = {
       app: 'Bhutta Shoes and Plastic Store',
@@ -1286,6 +2133,10 @@ const downloadBillPdf = (bill, items, paid, due, returns = []) => {
         'expenses',
         'order_returns',
         'customer_credits',
+        'purchases',
+        'purchase_items',
+        'stock_records',
+        'stock_record_items',
       ];
       for (const table of order) {
         const rows = backup.tables[table];
@@ -1343,12 +2194,14 @@ const downloadBillPdf = (bill, items, paid, due, returns = []) => {
     return (
       <div style={styles.center}>
         <div style={styles.box}>
-        <h2 style={{ color: '#10243A', textAlign: 'center' }}>
-          Bhutta Shoes & Plastic Store
-         </h2>
-         <p style={{ textAlign: 'center', color: '#168B65', fontWeight: '600' }}>
-         Created by Muhammad Rashid Bhutta
-        </p>
+          <h2 style={{ color: '#10243A', textAlign: 'center' }}>
+            Bhutta Shoes & Plastic Store
+          </h2>
+          <p
+            style={{ textAlign: 'center', color: '#168B65', fontWeight: '600' }}
+          >
+            Created by Muhammad Rashid Bhutta
+          </p>
           <h3 style={{ textAlign: 'center' }}>Owner Login</h3>
           <input
             style={styles.input}
@@ -1376,802 +2229,1605 @@ const downloadBillPdf = (bill, items, paid, due, returns = []) => {
     <div style={styles.appShell}>
       <header style={styles.topHeader}>
         <div>
-          <h2 style={{ margin: 0, color: '#ffffff' }}>Bhutta Shoes & Plastic Store</h2>
-          <p style={{ margin: '5px 0 0', color: '#bfdbfe', fontSize: 13 }}>Created by Muhammad Rashid Bhutta</p>
+          <h2 style={{ margin: 0, color: '#ffffff' }}>
+            Bhutta Shoes & Plastic Store
+          </h2>
+          <p style={{ margin: '5px 0 0', color: '#bfdbfe', fontSize: 13 }}>
+            Created by Muhammad Rashid Bhutta
+          </p>
         </div>
-        <button style={styles.headerLogout} onClick={logout}>Logout</button>
+        <button style={styles.headerLogout} onClick={logout}>
+          Logout
+        </button>
       </header>
       <div style={styles.appLayout}>
         <aside style={styles.sidebar}>
           <div style={styles.sidebarCaption}>STORE MENU</div>
           {[
-            ['dashboard', 'Dashboard'], ['bill', 'New Bill'], ['products', 'Products'],
-            ['customers', 'Customers'], ['udhar', 'Udhaar'], ['stock', 'Stock'],
-            ['profits', 'Reports'], ['savedBills', 'Saved Bills'], ['returnReports', 'Return Reports'], ['expenses', 'Expenses'], ['itemRequests', 'Item Requests']
+            ['dashboard', 'Dashboard'],
+            ['bill', 'New Bill'],
+            ['products', 'Products'],
+            ['customers', 'Customers'],
+            ['udhar', 'Udhaar'],
+            ['stock', 'Stock'],
+            ['purchases', 'Purchase Records'],
+            ['profits', 'Reports'],
+            ['savedBills', 'Saved Bills'],
+            ['returnReports', 'Return Reports'],
+            ['expenses', 'Expenses'],
+            ['itemRequests', 'Item Requests'],
           ].map(([key, label]) => (
-            <button key={key} style={page === key ? styles.navActive : styles.navButton} onClick={() => { setPage(key); setMessage(''); if (key === 'products') openProducts(); if (key === 'customers') openCustomers(); if (key === 'udhar') openUdhar(); if (key === 'stock') openStock(); if (key === 'expenses') openExpenses(); if (key === 'itemRequests') openItemRequests(); if (key === 'profits') openProfitReports(); if (key === 'savedBills') openSavedBills(); if (key === 'returnReports') openReturnReports(); if (key === 'bill') openBill(); }}>
+            <button
+              key={key}
+              style={page === key ? styles.navActive : styles.navButton}
+              onClick={() => {
+                setPage(key);
+                setMessage('');
+                if (key === 'products') openProducts();
+                if (key === 'customers') openCustomers();
+                if (key === 'udhar') openUdhar();
+                if (key === 'stock') openStock();
+                if (key === 'purchases') openPurchases();
+                if (key === 'expenses') openExpenses();
+                if (key === 'itemRequests') openItemRequests();
+                if (key === 'profits') openProfitReports();
+                if (key === 'savedBills') openSavedBills();
+                if (key === 'returnReports') openReturnReports();
+                if (key === 'bill') openBill();
+              }}
+            >
               {label}
             </button>
           ))}
           <div style={styles.sidebarCaption}>DATA</div>
-          <button style={styles.navButton} onClick={exportBackup} disabled={loading}>Download Backup</button>
-          <label style={styles.navButton}>Restore Backup<input key={backupInputKey} type="file" accept=".json,application/json" onChange={importBackup} style={{display:'none'}} /></label>
-        </aside>
-        <main style={styles.mainContent}>
-          {page === 'dashboard' && (
-        <>
-          <h3>Owner Dashboard</h3>
-          <div style={styles.statsGrid}>
-            <div style={styles.statCard}><span>Total Products</span><strong>{products.length}</strong></div>
-            <div style={styles.statCard}><span>Total Sales Today</span><strong>{money(todaySales)}</strong></div>
-            <div style={styles.statCard}><span>Customers</span><strong>{customers.length}</strong></div>
-            <div style={styles.statCard}><span>Low Stock Items</span><strong>{lowStockProducts.length}</strong></div>
-          </div>
-          <div style={styles.box}>
-            <h3>Aaj ka Hisab</h3>
-            <p>
-              Daily Sale: <b>{money(todaySales)}</b>
-            </p>
-            <p>
-              Daily Gross Profit: <b>{money(todayProfit)}</b>
-            </p>
-            <p>
-              Daily Expenses: <b>{money(todayExpenses)}</b>
-            </p>
-            <p>
-              Net Profit after expenses:{' '}
-              <b
-                style={{
-                  color: todayProfit - todayExpenses >= 0 ? 'green' : 'red',
-                }}
-              >
-                {money(todayProfit - todayExpenses)}
-              </b>
-            </p>
-            <button style={styles.gray} onClick={openDailyReport}>
-              Daily Report Dekhein
-            </button>
-          </div>
-          <button style={styles.green} onClick={openProducts}>
-            Products
+          <button
+            style={styles.navButton}
+            onClick={exportBackup}
+            disabled={loading}
+          >
+            Download Backup
           </button>
-          <button style={styles.gray} onClick={openBill}>
-            New Bill
-          </button>
-          <button style={styles.gray} onClick={openItemRequests}>
-            New Item Demand
-          </button>
-          <button style={styles.gray} onClick={openCustomers}>
-            Customers
-          </button>
-          <button style={styles.gray} onClick={openUdhar}>
-            Udhar Record
-          </button>
-          <button style={styles.gray} onClick={openStock}>
-            Stock
-          </button>
-          <button style={styles.gray} onClick={openProfitReports}>
-            Profit Reports
-          </button>
-          <button style={styles.gray} onClick={openExpenses}>
-            Expenses Record
-          </button>
-          <button style={styles.gray} onClick={exportBackup} disabled={loading}>
-            {loading ? 'Please wait...' : 'Download Data Backup'}
-          </button>
-          <label style={styles.uploadLabel}>
-            Restore Backup (JSON)
+          <label style={styles.navButton}>
+            Restore Backup
             <input
               key={backupInputKey}
               type="file"
               accept=".json,application/json"
               onChange={importBackup}
-              style={{ display: 'block', marginTop: 8 }}
+              style={{ display: 'none' }}
             />
           </label>
-          <div style={styles.box}>
-            <h3>Low Stock Alert ({lowStockProducts.length})</h3>
-            {lowStockProducts.length === 0 ? (
-              <p>Sab products ka stock theek hai.</p>
-            ) : (
-              lowStockProducts.map((p) => (
-                <p key={p.id}>
-                  <b>{p.name}</b> —{' '}
-                  {p.stock <= 0 ? 'Out of Stock' : `Sirf ${p.stock} baqi`}
-                </p>
-              ))
-            )}
-          </div>
-          <div style={styles.box}>
-            <h3>Udhaar Payment Reminders</h3>
-            <button style={styles.green} onClick={loadDueReminders}>
-              Refresh Reminders
-            </button>
-            {dueReminders.length === 0 ? (
-              <p>Abhi koi overdue payment nahi hai.</p>
-            ) : (
-              dueReminders.map((bill) => (
-                <div key={bill.id} style={styles.product}>
-                  <b>{bill.customer_name}</b>
-                  <p>Mobile: {bill.phone || '-'}</p>
-                  <p>Bill Number: {bill.id}</p>
-                  <p>Due Date: {bill.due_date}</p>
-                  <b style={{ color: 'red' }}>
-                    Baqi Udhaar: {money(bill.balance)}
-                  </b>
-                  <p style={{ color: 'red' }}>Payment overdue hai!</p>
-                  <button
-                    style={styles.whatsapp}
-                    onClick={() => sendWhatsAppForBill(bill)}
-                  >
-                    WhatsApp Reminder
-                  </button>
+        </aside>
+        <main style={styles.mainContent}>
+          {page === 'dashboard' && (
+            <>
+              <h3>Owner Dashboard</h3>
+              <div style={styles.statsGrid}>
+                <div style={styles.statCard}>
+                  <span>Total Products</span>
+                  <strong>{products.length}</strong>
                 </div>
-              ))
-            )}
-          </div>
-          <p>{message}</p>
-        </>
-      )}
-
-      {page !== 'dashboard' && (
-        <button
-          style={styles.gray}
-          onClick={() => {
-            setPage('dashboard');
-            setMessage('');
-            setScannerOpen(false);
-          }}
-        >
-          ← Back to Dashboard
-        </button>
-      )}
-
-      {page === 'customers' && (
-        <>
-          <h3>Customers List</h3>
-          <button style={styles.green} onClick={loadCustomers}>
-            Refresh Customers
-          </button>
-          <p>Total Customers: {customers.length}</p>
-          {customers.length === 0 ? (
-            <p>Abhi koi customer nahi hai.</p>
-          ) : (
-            customers.map((c) => (
-              <div key={c.id} style={styles.product}>
-                <b>{c.name}</b>
-                <p>Mobile: {c.phone || '-'}</p>
-                <p>Customer ID: {c.id}</p>
-                <p>
-                  Added:{' '}
-                  {c.created_at
-                    ? new Date(c.created_at).toLocaleDateString()
-                    : '-'}
-                </p>
+                <div style={styles.statCard}>
+                  <span>Total Sales Today</span>
+                  <strong>{money(todaySales)}</strong>
+                </div>
+                <div style={styles.statCard}>
+                  <span>Customers</span>
+                  <strong>{customers.length}</strong>
+                </div>
+                <div style={styles.statCard}>
+                  <span>Low Stock Items</span>
+                  <strong>{lowStockProducts.length}</strong>
+                </div>
               </div>
-            ))
+              <div style={styles.box}>
+                <h3>Aaj ka Hisab</h3>
+                <p>
+                  Daily Sale: <b>{money(todaySales)}</b>
+                </p>
+                <p>
+                  Daily Gross Profit: <b>{money(todayProfit)}</b>
+                </p>
+                <p>
+                  Daily Expenses: <b>{money(todayExpenses)}</b>
+                </p>
+                <p>
+                  Net Profit after expenses:{' '}
+                  <b
+                    style={{
+                      color: todayProfit - todayExpenses >= 0 ? 'green' : 'red',
+                    }}
+                  >
+                    {money(todayProfit - todayExpenses)}
+                  </b>
+                </p>
+                <button style={styles.gray} onClick={openDailyReport}>
+                  Daily Report Dekhein
+                </button>
+              </div>
+              <button style={styles.green} onClick={openProducts}>
+                Products
+              </button>
+              <button style={styles.gray} onClick={openBill}>
+                New Bill
+              </button>
+              <button style={styles.gray} onClick={openItemRequests}>
+                New Item Demand
+              </button>
+              <button style={styles.gray} onClick={openCustomers}>
+                Customers
+              </button>
+              <button style={styles.gray} onClick={openUdhar}>
+                Udhar Record
+              </button>
+              <button style={styles.gray} onClick={openStock}>
+                Stock
+              </button>
+              <button style={styles.gray} onClick={openProfitReports}>
+                Profit Reports
+              </button>
+              <button style={styles.gray} onClick={openExpenses}>
+                Expenses Record
+              </button>
+              <button
+                style={styles.gray}
+                onClick={exportBackup}
+                disabled={loading}
+              >
+                {loading ? 'Please wait...' : 'Download Data Backup'}
+              </button>
+              <label style={styles.uploadLabel}>
+                Restore Backup (JSON)
+                <input
+                  key={backupInputKey}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={importBackup}
+                  style={{ display: 'block', marginTop: 8 }}
+                />
+              </label>
+              <div style={styles.box}>
+                <h3>Low Stock Alert ({lowStockProducts.length})</h3>
+                {lowStockProducts.length === 0 ? (
+                  <p>Sab products ka stock theek hai.</p>
+                ) : (
+                  lowStockProducts.map((p) => (
+                    <p key={p.id}>
+                      <b>{p.name}</b> —{' '}
+                      {p.stock <= 0 ? 'Out of Stock' : `Sirf ${p.stock} baqi`}
+                    </p>
+                  ))
+                )}
+              </div>
+              <div style={styles.box}>
+                <h3>Udhaar Payment Reminders</h3>
+                <button style={styles.green} onClick={loadDueReminders}>
+                  Refresh Reminders
+                </button>
+                {dueReminders.length === 0 ? (
+                  <p>Abhi koi overdue payment nahi hai.</p>
+                ) : (
+                  dueReminders.map((bill) => (
+                    <div key={bill.id} style={styles.product}>
+                      <b>{bill.customer_name}</b>
+                      <p>Mobile: {bill.phone || '-'}</p>
+                      <p>Bill Number: {bill.id}</p>
+                      <p>Due Date: {bill.due_date}</p>
+                      <b style={{ color: 'red' }}>
+                        Baqi Udhaar: {money(bill.balance)}
+                      </b>
+                      <p style={{ color: 'red' }}>Payment overdue hai!</p>
+                      <button
+                        style={styles.whatsapp}
+                        onClick={() => sendWhatsAppForBill(bill)}
+                      >
+                        WhatsApp Reminder
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+              <p>{message}</p>
+            </>
           )}
-          <p>{message}</p>
-        </>
-      )}
 
-      {page === 'udhar' && (
-        <>
-          <h3>Udhar Record</h3>
-          <button style={styles.green} onClick={loadUdharRecords}>
-            Refresh Udhar
-          </button>
-          {!udharBills.length ? (
-            <p>Kisi customer ka udhaar baqi nahi hai.</p>
-          ) : (
-            udharBills.map((bill) => (
-              <div key={bill.id} style={styles.product}>
-                <b>{bill.customer_name}</b>
-                <p>Mobile: {bill.phone || '-'}</p>
-                <p>Bill Number: {bill.id}</p>
-                <p>Bill Total: {money(bill.total)}</p>
-                <p>Paid: {money(bill.paid)}</p>
-                <b style={{ color: 'red' }}>Remaining: {money(bill.balance)}</b>
-                <p>Due Date: {bill.due_date || '-'}</p>
-                <h4>Payment Jama Karein</h4>
+          {page !== 'dashboard' && (
+            <button
+              style={styles.gray}
+              onClick={() => {
+                setPage('dashboard');
+                setMessage('');
+                setScannerOpen(false);
+              }}
+            >
+              ← Back to Dashboard
+            </button>
+          )}
+
+          {page === 'customers' && (
+            <>
+              <h3>Customers List</h3>
+              <button style={styles.green} onClick={loadCustomers}>
+                Refresh Customers
+              </button>
+              <p>Total Customers: {customers.length}</p>
+              {customers.length === 0 ? (
+                <p>Abhi koi customer nahi hai.</p>
+              ) : (
+                customers.map((c) => (
+                  <div key={c.id} style={styles.product}>
+                    <b>{c.name}</b>
+                    <p>Mobile: {c.phone || '-'}</p>
+                    <p>Customer ID: {c.id}</p>
+                    <p>
+                      Added:{' '}
+                      {c.created_at
+                        ? new Date(c.created_at).toLocaleDateString()
+                        : '-'}
+                    </p>
+                  </div>
+                ))
+              )}
+              <p>{message}</p>
+            </>
+          )}
+
+          {page === 'udhar' && (
+            <>
+              <h3>Udhar Record</h3>
+              <button style={styles.green} onClick={loadUdharRecords}>
+                Refresh Udhar
+              </button>
+              {!udharBills.length ? (
+                <p>Kisi customer ka udhaar baqi nahi hai.</p>
+              ) : (
+                udharBills.map((bill) => (
+                  <div key={bill.id} style={styles.product}>
+                    <b>{bill.customer_name}</b>
+                    <p>Mobile: {bill.phone || '-'}</p>
+                    <p>Bill Number: {bill.id}</p>
+                    <p>Bill Total: {money(bill.total)}</p>
+                    <p>Paid: {money(bill.paid)}</p>
+                    <b style={{ color: 'red' }}>
+                      Remaining: {money(bill.balance)}
+                    </b>
+                    <p>Due Date: {bill.due_date || '-'}</p>
+                    <h4>Payment Jama Karein</h4>
+                    <input
+                      style={styles.input}
+                      type="number"
+                      min="0"
+                      placeholder="Payment Amount"
+                      value={paymentAmounts[bill.id] || ''}
+                      onChange={(e) =>
+                        setPaymentAmounts((old) => ({
+                          ...old,
+                          [bill.id]: e.target.value,
+                        }))
+                      }
+                    />
+                    <select
+                      style={styles.input}
+                      value={paymentMethod}
+                      onChange={(e) => setPaymentMethod(e.target.value)}
+                    >
+                      <option>Cash</option>
+                      <option>Bank Transfer</option>
+                      <option>JazzCash</option>
+                      <option>EasyPaisa</option>
+                    </select>
+                    <button
+                      style={styles.green}
+                      disabled={loading}
+                      onClick={() => saveUdharPayment(bill)}
+                    >
+                      {loading ? 'Saving...' : 'Save Payment'}
+                    </button>
+                    <button
+                      style={styles.whatsapp}
+                      onClick={() => whatsappReminder(bill)}
+                    >
+                      WhatsApp Reminder
+                    </button>
+                    {bill.payments.length > 0 && (
+                      <>
+                        <h4>Payment History</h4>
+                        {bill.payments.map((p) => (
+                          <p key={p.id}>
+                            {money(p.amount)} — {p.payment_method || '-'}
+                          </p>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                ))
+              )}
+              <p>{message}</p>
+            </>
+          )}
+
+          {page === 'stock' && (
+            <>
+              <h3>Opening / Closing Stock Management</h3>
+              <div style={styles.box}>
+                <p>
+                  Stock ki value Purchase Rate ke mutabiq calculate hogi.
+                  Opening stock ke liye pichlay din ka aakhri Closing Stock use
+                  hoga.
+                </p>
+                <button
+                  style={styles.green}
+                  disabled={loading}
+                  onClick={() => saveStockSnapshot('opening')}
+                >
+                  Aaj ka Opening Stock Save Karein
+                </button>
+                <button
+                  style={styles.gray}
+                  disabled={loading}
+                  onClick={() => saveStockSnapshot('closing')}
+                >
+                  Aaj ka Closing Stock Save Karein
+                </button>
+                <button style={styles.gray} onClick={loadStockRecords}>
+                  Refresh History
+                </button>
+              </div>
+              <div style={styles.statsGrid}>
+                <div style={styles.statCard}>
+                  <span>Current Products</span>
+                  <strong>{products.length}</strong>
+                </div>
+                <div style={styles.statCard}>
+                  <span>Current Stock Value</span>
+                  <strong>
+                    {money(
+                      products.reduce(
+                        (sum, p) =>
+                          sum + Number(p.stock || 0) * Number(p.buy_price || 0),
+                        0
+                      )
+                    )}
+                  </strong>
+                </div>
+              </div>
+              <h3>Current Stock</h3>
+              {products.map((p) => (
+                <div key={p.id} style={styles.product}>
+                  <b>{p.name}</b>
+                  <p>Quantity: {p.stock}</p>
+                  <p>Purchase Rate: {money(p.buy_price)}</p>
+                  <b>
+                    {money(Number(p.stock || 0) * Number(p.buy_price || 0))}
+                  </b>
+                </div>
+              ))}
+              <h3>Opening / Closing History</h3>
+              <select
+                style={styles.input}
+                value={stockPeriod}
+                onChange={(e) => setStockPeriod(e.target.value)}
+              >
+                <option value="day">Daily</option>
+                <option value="week">Weekly</option>
+                <option value="month">Monthly</option>
+                <option value="year">Yearly</option>
+                <option value="all">All Records</option>
+              </select>
+              {stockRecords
+                .filter(
+                  (record) =>
+                    stockPeriod === 'all' ||
+                    new Date(`${record.record_date}T00:00:00`) >=
+                      periodStart(stockPeriod)
+                )
+                .map((record) => (
+                  <div key={record.id} style={styles.product}>
+                    <b>
+                      {record.record_type === 'opening'
+                        ? 'Opening Stock'
+                        : 'Closing Stock'}{' '}
+                      — {record.record_date}
+                    </b>
+                    <p>Total Value: {money(record.total_value)}</p>
+                    <button
+                      style={styles.gray}
+                      onClick={() => viewStockRecord(record)}
+                    >
+                      Details Dekhein
+                    </button>
+                  </div>
+                ))}
+              {stockRecordItems.length > 0 && (
+                <div style={styles.box}>
+                  <h3>Selected Stock Record</h3>
+                  {stockRecordItems.map((row, i) => (
+                    <p key={i}>
+                      {row.product_name} — Qty: {row.quantity} —{' '}
+                      {money(row.total_value)}
+                    </p>
+                  ))}
+                </div>
+              )}
+              <p>{message}</p>
+            </>
+          )}
+
+          {(page === 'profits' || page === 'dailyReport') && (
+            <>
+              <h3>
+                {page === 'profits'
+                  ? 'Profit Reports'
+                  : 'Daily Sale and Profit Report'}
+              </h3>
+              <button
+                style={styles.green}
+                onClick={async () => {
+                  await loadProfitReports();
+                  await loadExpenses();
+                }}
+              >
+                Refresh Reports
+              </button>
+              <select
+                style={styles.input}
+                value={salesPeriod}
+                onChange={(e) => setSalesPeriod(e.target.value)}
+              >
+                <option value="day">Daily</option>
+                <option value="week">Weekly</option>
+                <option value="month">Monthly</option>
+                <option value="year">Yearly</option>
+                <option value="all">All Records</option>
+              </select>
+              <div style={styles.box}>
+                <h3>
+                  Total Sales:{' '}
+                  {money(reportProfitRows.reduce((s, r) => s + r.sale, 0))}
+                </h3>
+                <h3>
+                  Purchase Cost:{' '}
+                  {money(reportProfitRows.reduce((s, r) => s + r.cost, 0))}
+                </h3>
+                <h2 style={{ color: 'green' }}>
+                  Gross Profit:{' '}
+                  {money(reportProfitRows.reduce((s, r) => s + r.profit, 0))}
+                </h2>
+                <p>Today Sale: {money(todaySales)}</p>
+                <p>Today Gross Profit: {money(todayProfit)}</p>
+                <p>Today Expenses: {money(todayExpenses)}</p>
+                <b>Today Net Profit: {money(todayProfit - todayExpenses)}</b>
+              </div>
+              <h3>
+                {page === 'dailyReport' ? 'Aaj ke Bills' : 'Bill Wise Profit'}
+              </h3>
+              {reportProfitRows.length === 0 ? (
+                <p>Is period mein sales record nahi hai.</p>
+              ) : (
+                reportProfitRows.map((row) => (
+                  <div key={row.order_id} style={styles.product}>
+                    <b>Bill Number: {row.order_id}</b>
+                    <p>Customer: {row.customer_name || '-'}</p>
+                    <p>
+                      Date:{' '}
+                      {row.created_at
+                        ? new Date(row.created_at).toLocaleString()
+                        : '-'}
+                    </p>
+                    <p>Sale: {money(row.sale)}</p>
+                    <p>Purchase Cost: {money(row.cost)}</p>
+                    <b style={{ color: 'green' }}>
+                      Profit: {money(row.profit)}
+                    </b>
+                  </div>
+                ))
+              )}
+              <p>{message}</p>
+            </>
+          )}
+
+          {page === 'savedBills' && (
+            <>
+              <h3>Saved Bills</h3>
+              <button style={styles.green} onClick={loadSavedBills}>
+                Refresh Bills
+              </button>
+              {selectedSavedBill ? (
+                <div style={styles.box}>
+                  <button
+                    style={styles.gray}
+                    onClick={() => setSelectedSavedBill(null)}
+                  >
+                    Back to Bills
+                  </button>
+                  <h3>Bill #{selectedSavedBill.id}</h3>
+                  <p>Customer: {selectedSavedBill.customer_name || '-'}</p>
+                  <p>Mobile: {selectedSavedBill.phone || '-'}</p>
+                  <p>
+                    Date:{' '}
+                    {new Date(selectedSavedBill.created_at).toLocaleString()}
+                  </p>
+                  {(selectedSavedBill.items || []).map((item, i) => (
+                    <p key={i}>
+                      {item.name || `Product #${item.product_id}`} —{' '}
+                      {item.quantity} x {money(item.price)} ={' '}
+                      {money(item.quantity * item.price)}
+                    </p>
+                  ))}
+                  <h3>Total: {money(selectedSavedBill.total)}</h3>
+                </div>
+              ) : (
+                savedBills.map((bill) => (
+                  <div key={bill.id} style={styles.product}>
+                    <b>Bill #{bill.id}</b>
+                    <p>
+                      {bill.customer_name || '-'} | {bill.phone || '-'}
+                    </p>
+                    <p>{new Date(bill.created_at).toLocaleString()}</p>
+                    <b>{money(bill.total)}</b>
+                    <br />
+                    <button
+                      style={styles.green}
+                      onClick={async () => {
+                        const { data, error } = await supabase
+                          .from('order_items')
+                          .select('*')
+                          .eq('order_id', bill.id);
+                        if (error) return setMessage(error.message);
+                        const items = await Promise.all(
+                          (data || []).map(async (it) => {
+                            const p = products.find(
+                              (x) => String(x.id) === String(it.product_id)
+                            );
+                            return {
+                              ...it,
+                              name: p?.name || `Product #${it.product_id}`,
+                            };
+                          })
+                        );
+                        setSelectedSavedBill({ ...bill, items });
+                      }}
+                    >
+                      View Bill
+                    </button>
+                  </div>
+                ))
+              )}
+              <p>{message}</p>
+            </>
+          )}
+
+          {page === 'returnReports' && (
+            <>
+              <h3>Product Return Reports</h3>
+              <button style={styles.green} onClick={loadReturnReports}>
+                Refresh Returns
+              </button>
+              <select
+                style={styles.input}
+                value={returnPeriod}
+                onChange={(e) => setReturnPeriod(e.target.value)}
+              >
+                <option value="day">Daily</option>
+                <option value="week">Weekly</option>
+                <option value="month">Monthly</option>
+                <option value="year">Yearly</option>
+                <option value="all">All Records</option>
+              </select>
+              {(() => {
+                const now = new Date();
+                const rows = returnRows.filter((r) => {
+                  const d = new Date(r.created_at);
+                  if (returnPeriod === 'all') return true;
+                  if (returnPeriod === 'day')
+                    return d.toDateString() === now.toDateString();
+                  if (returnPeriod === 'week') {
+                    const start = new Date(now);
+                    start.setDate(now.getDate() - 7);
+                    return d >= start;
+                  }
+                  if (returnPeriod === 'month')
+                    return (
+                      d.getMonth() === now.getMonth() &&
+                      d.getFullYear() === now.getFullYear()
+                    );
+                  return d.getFullYear() === now.getFullYear();
+                });
+                return (
+                  <>
+                    <div style={styles.box}>
+                      <h3>
+                        Total Returned:{' '}
+                        {rows.reduce((s, r) => s + Number(r.quantity || 0), 0)}{' '}
+                        items
+                      </h3>
+                      <h3>
+                        Return Amount:{' '}
+                        {money(
+                          rows.reduce(
+                            (s, r) =>
+                              s +
+                              Number(r.quantity || 0) * Number(r.price || 0),
+                            0
+                          )
+                        )}
+                      </h3>
+                    </div>
+                    {rows.map((r) => (
+                      <div key={r.id} style={styles.product}>
+                        <b>{r.product_name}</b>
+                        <p>
+                          Old Bill: #{r.order_id} | New Bill: #
+                          {r.new_bill_id || '-'}
+                        </p>
+                        <p>
+                          Customer:{' '}
+                          {r.customers?.name ||
+                            (r.customer_id
+                              ? `Customer #${r.customer_id}`
+                              : '-')}
+                        </p>
+                        <p>
+                          Quantity: {r.quantity} | Amount:{' '}
+                          {money(Number(r.quantity) * Number(r.price))}
+                        </p>
+                        <p>Date: {new Date(r.created_at).toLocaleString()}</p>
+                        <p>Refund: {r.refund_method || '-'}</p>
+                      </div>
+                    ))}
+                  </>
+                );
+              })()}
+            </>
+          )}
+
+          {page === 'purchases' && (
+            <>
+              <h3>Purchase Records</h3>
+              <div style={styles.box}>
+                <h4>Supplier Details</h4>
+                <input
+                  style={styles.input}
+                  placeholder="Supplier / Source Name"
+                  value={purchaseSupplier}
+                  onChange={(e) => setPurchaseSupplier(e.target.value)}
+                />
+                <input
+                  style={styles.input}
+                  placeholder="Supplier Mobile Number"
+                  value={purchasePhone}
+                  onChange={(e) => setPurchasePhone(e.target.value)}
+                />
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={purchaseDate}
+                  onChange={(e) => setPurchaseDate(e.target.value)}
+                />
+                <textarea
+                  style={styles.input}
+                  placeholder="Purchase Note (optional)"
+                  value={purchaseNote}
+                  onChange={(e) => setPurchaseNote(e.target.value)}
+                />
+                <label style={styles.uploadLabel}>
+                  Invoice Photo (Camera / Gallery)
+                  <input
+                    style={styles.input}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={(e) =>
+                      setPurchaseInvoice(e.target.files?.[0] || null)
+                    }
+                  />
+                  {purchaseInvoice && <small>{purchaseInvoice.name}</small>}
+                </label>
+                <h4>Purchase Item Add Karein</h4>
+                <select
+                  style={styles.input}
+                  value={purchaseProductId}
+                  onChange={(e) => {
+                    setPurchaseProductId(e.target.value);
+                    setPurchaseNewProductName('');
+                  }}
+                >
+                  <option value="">
+                    Existing product select karein (optional)
+                  </option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} — Current Stock: {p.stock}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  style={styles.input}
+                  placeholder="Agar naya product hai to naam likhein"
+                  value={purchaseNewProductName}
+                  onChange={(e) => {
+                    setPurchaseNewProductName(e.target.value);
+                    setPurchaseProductId('');
+                  }}
+                />
+                <input
+                  style={styles.input}
+                  type="number"
+                  min="1"
+                  placeholder="Quantity"
+                  value={purchaseQty}
+                  onChange={(e) => setPurchaseQty(e.target.value)}
+                />
                 <input
                   style={styles.input}
                   type="number"
                   min="0"
-                  placeholder="Payment Amount"
-                  value={paymentAmounts[bill.id] || ''}
-                  onChange={(e) =>
-                    setPaymentAmounts((old) => ({
-                      ...old,
-                      [bill.id]: e.target.value,
-                    }))
-                  }
+                  placeholder="Purchase Rate per item"
+                  value={purchaseRate}
+                  onChange={(e) => setPurchaseRate(e.target.value)}
                 />
+                <button style={styles.green} onClick={addPurchaseItem}>
+                  Purchase List Mein Add Karein
+                </button>
+              </div>
+              {purchaseCart.map((item, i) => (
+                <div style={styles.product} key={i}>
+                  <b>{item.product_name}</b>
+                  <p>
+                    Qty: {item.quantity} × {money(item.purchase_rate)} ={' '}
+                    {money(item.total)}
+                  </p>
+                  <button
+                    style={styles.red}
+                    onClick={() =>
+                      setPurchaseCart((old) =>
+                        old.filter((_, index) => index !== i)
+                      )
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <div style={styles.box}>
+                <h3>
+                  Purchase Total:{' '}
+                  {money(
+                    purchaseCart.reduce(
+                      (sum, item) => sum + Number(item.total || 0),
+                      0
+                    )
+                  )}
+                </h3>
+                <button
+                  style={styles.green}
+                  disabled={loading || !purchaseCart.length}
+                  onClick={savePurchase}
+                >
+                  {loading
+                    ? 'Saving Purchase...'
+                    : 'Save Purchase & Update Stock'}
+                </button>
+              </div>
+              <h3>Purchase History</h3>
+              <button style={styles.gray} onClick={downloadPurchaseReportPdf}>
+                Download Purchase Report PDF
+              </button>
+              <select
+                style={styles.input}
+                value={purchasePeriod}
+                onChange={(e) => setPurchasePeriod(e.target.value)}
+              >
+                <option value="day">Daily</option>
+                <option value="week">Weekly</option>
+                <option value="month">Monthly</option>
+                <option value="year">Yearly</option>
+                <option value="all">All Records</option>
+              </select>
+              <div style={styles.box}>
+                <b>
+                  Filtered Purchase Total:{' '}
+                  {money(
+                    purchaseRows
+                      .filter(
+                        (r) =>
+                          purchasePeriod === 'all' ||
+                          new Date(`${r.purchase_date}T00:00:00`) >=
+                            periodStart(purchasePeriod)
+                      )
+                      .reduce((sum, r) => sum + Number(r.total_amount || 0), 0)
+                  )}
+                </b>
+              </div>
+              {purchaseRows
+                .filter(
+                  (r) =>
+                    purchasePeriod === 'all' ||
+                    new Date(`${r.purchase_date}T00:00:00`) >=
+                      periodStart(purchasePeriod)
+                )
+                .map((r) => (
+                  <div style={styles.product} key={r.id}>
+                    <b>Purchase #{r.id}</b>
+                    <p>Date: {r.purchase_date}</p>
+                    <p>
+                      Supplier: {r.supplier_name || '-'} | Phone:{' '}
+                      {r.supplier_phone || '-'}
+                    </p>
+                    <b>Total: {money(r.total_amount)}</b>
+                    {r.invoice_image_url && (
+                      <p>
+                        <a
+                          href={r.invoice_image_url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Invoice Photo Dekhein
+                        </a>
+                      </p>
+                    )}
+                    {r.note && <p>Note: {r.note}</p>}
+                    <button
+                      style={styles.gray}
+                      onClick={async () => {
+                        const { data, error } = await supabase
+                          .from('purchase_items')
+                          .select('*')
+                          .eq('purchase_id', r.id);
+                        if (error) return setMessage(error.message);
+                        setPurchaseSelectedItems(data || []);
+                      }}
+                    >
+                      Items Details
+                    </button>
+                  </div>
+                ))}
+              {purchaseSelectedItems.length > 0 && (
+                <div style={styles.box}>
+                  <h3>Purchase Items Details</h3>
+                  {purchaseSelectedItems.map((item) => (
+                    <p key={item.id}>
+                      {item.product_name} — {item.quantity} ×{' '}
+                      {money(item.purchase_rate)} = {money(item.total)}
+                    </p>
+                  ))}
+                </div>
+              )}
+              <p>{message}</p>
+            </>
+          )}
+
+          {page === 'expenses' && (
+            <>
+              <h3>Expenses Record</h3>
+              <div style={styles.box}>
+                <input
+                  style={styles.input}
+                  placeholder="Expense ka naam (misal: Kiraya, Bijli)"
+                  value={expenseTitle}
+                  onChange={(e) => setExpenseTitle(e.target.value)}
+                />
+                <input
+                  style={styles.input}
+                  type="number"
+                  min="0"
+                  placeholder="Amount (PKR)"
+                  value={expenseAmount}
+                  onChange={(e) => setExpenseAmount(e.target.value)}
+                />
+                <select
+                  style={styles.input}
+                  value={expenseCategory}
+                  onChange={(e) => setExpenseCategory(e.target.value)}
+                >
+                  <option>General</option>
+                  <option>Rent</option>
+                  <option>Electricity</option>
+                  <option>Transport</option>
+                  <option>Salary</option>
+                  <option>Repair</option>
+                  <option>Other</option>
+                </select>
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={expenseDate}
+                  onChange={(e) => setExpenseDate(e.target.value)}
+                />
+                <textarea
+                  style={styles.input}
+                  placeholder="Note (optional)"
+                  value={expenseNote}
+                  onChange={(e) => setExpenseNote(e.target.value)}
+                />
+                <button
+                  style={styles.green}
+                  disabled={loading}
+                  onClick={saveExpense}
+                >
+                  {loading ? 'Saving...' : 'Save Expense'}
+                </button>
+              </div>
+              <h3>Expense History</h3>
+              <button style={styles.gray} onClick={loadExpenses}>
+                Refresh Expenses
+              </button>
+              <h3>
+                Total Expenses:{' '}
+                {money(expenses.reduce((s, e) => s + Number(e.amount || 0), 0))}
+              </h3>
+              {expenses.length === 0 ? (
+                <p>Abhi koi expense record nahi hai.</p>
+              ) : (
+                expenses.map((e) => (
+                  <div key={e.id} style={styles.product}>
+                    <b>{e.title}</b>
+                    <p>Amount: {money(e.amount)}</p>
+                    <p>Category: {e.category || '-'}</p>
+                    <p>Date: {e.expense_date || '-'}</p>
+                    <p>Note: {e.note || '-'}</p>
+                    <button
+                      style={styles.red}
+                      onClick={() => deleteExpense(e.id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))
+              )}
+              <p>{message}</p>
+            </>
+          )}
+
+          {page === 'itemRequests' && (
+            <>
+              <h3>New Item Demand</h3>
+              <div style={styles.box}>
+                <input
+                  style={styles.input}
+                  placeholder="Item ka naam likhein"
+                  value={itemName}
+                  onChange={(e) => setItemName(e.target.value)}
+                />
+                <button
+                  style={styles.green}
+                  onClick={saveItemRequest}
+                  disabled={loading}
+                >
+                  {loading ? 'Saving...' : 'Save Item'}
+                </button>
+                <p>{message}</p>
+              </div>
+              <h3>Requested Items</h3>
+              {!itemRequests.length ? (
+                <p>Abhi koi new item request nahi hai.</p>
+              ) : (
+                itemRequests.map((item) => (
+                  <div key={item.id} style={styles.product}>
+                    <b>{item.item_name}</b>
+                    <button
+                      style={styles.red}
+                      onClick={() => deleteItemRequest(item.id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ))
+              )}
+            </>
+          )}
+
+          {page === 'products' && (
+            <>
+              <h3>Products Management</h3>
+              <div style={styles.statsGrid}>
+                <div style={styles.statCard}>
+                  <span>Total Products</span>
+                  <strong>{products.length}</strong>
+                </div>
+                <div style={styles.statCard}>
+                  <span>Total Stock Value</span>
+                  <strong>
+                    {money(
+                      products.reduce(
+                        (sum, p) =>
+                          sum + Number(p.stock || 0) * Number(p.buy_price || 0),
+                        0
+                      )
+                    )}
+                  </strong>
+                </div>
+                <div style={styles.statCard}>
+                  <span>Best Selling Item</span>
+                  <strong>{topSelling[0]?.name || 'Abhi sale nahi'}</strong>
+                </div>
+                <div style={styles.statCard}>
+                  <span>Low Stock Items</span>
+                  <strong>{lowStockProducts.length}</strong>
+                </div>
+              </div>
+              <div style={styles.box}>
+                <div style={styles.sectionHeading}>
+                  <h3 style={{ margin: 0 }}>Top Selling Products</h3>
+                  <button style={styles.gray} onClick={loadTopSelling}>
+                    Refresh
+                  </button>
+                </div>
+                {topSelling.length ? (
+                  topSelling.map((item) => (
+                    <p key={item.product_id}>
+                      <b>{item.name}</b> — {item.quantity} sold
+                    </p>
+                  ))
+                ) : (
+                  <p>Abhi sales record mojood nahi.</p>
+                )}
+              </div>
+              <div style={styles.box}>
+                <h3>{editingId ? 'Edit Product' : 'Add New Product'}</h3>
+                <input
+                  style={styles.input}
+                  placeholder="Product Name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+                <input
+                  style={styles.input}
+                  type="number"
+                  placeholder="Buy Price (PKR)"
+                  value={buyPrice}
+                  onChange={(e) => setBuyPrice(e.target.value)}
+                />
+                <input
+                  style={styles.input}
+                  type="number"
+                  placeholder="Stock Quantity"
+                  value={stock}
+                  onChange={(e) => setStock(e.target.value)}
+                />
+                <input
+                  style={styles.input}
+                  placeholder="Barcode Number (optional)"
+                  value={barcode}
+                  onChange={(e) => setBarcode(e.target.value)}
+                />
+                <select
+                  style={styles.input}
+                  value={categoryId}
+                  onChange={(e) => setCategoryId(e.target.value)}
+                >
+                  <option value="">Select Category</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  style={styles.input}
+                  placeholder="Description (optional)"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+                <label style={styles.uploadLabel}>
+                  Product Picture (Camera / Gallery)
+                  <input
+                    style={{ ...styles.input, marginBottom: 4 }}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={(e) =>
+                      setProductImage(e.target.files?.[0] || null)
+                    }
+                  />
+                  {productImage && <small>{productImage.name}</small>}
+                </label>
+                <button
+                  style={styles.green}
+                  onClick={saveProduct}
+                  disabled={loading}
+                >
+                  {loading
+                    ? 'Saving...'
+                    : editingId
+                    ? 'Update Product'
+                    : 'Save Product'}
+                </button>
+                {editingId && (
+                  <button style={styles.gray} onClick={clearForm}>
+                    Cancel Edit
+                  </button>
+                )}
+                <p>{message}</p>
+              </div>
+              <div style={styles.sectionHeading}>
+                <h3 style={{ margin: 0 }}>All Products</h3>
+                <span>{products.length} items</span>
+              </div>
+              <input
+                style={styles.input}
+                placeholder="Search product name / barcode..."
+                value={productSearch}
+                onChange={(e) => setProductSearch(e.target.value)}
+              />
+              <select
+                style={styles.input}
+                value={productCategoryFilter}
+                onChange={(e) => setProductCategoryFilter(e.target.value)}
+              >
+                <option value="all">All Categories</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              {!products.length && <p>Abhi koi product nahi hai.</p>}
+              <div style={styles.productGrid}>
+                {products
+                  .filter(
+                    (p) =>
+                      (p.name || '')
+                        .toLowerCase()
+                        .includes(productSearch.toLowerCase()) ||
+                      String(p.barcode || '').includes(productSearch)
+                  )
+                  .filter(
+                    (p) =>
+                      productCategoryFilter === 'all' ||
+                      String(p.category_id) === productCategoryFilter
+                  )
+                  .map((p) => (
+                    <div key={p.id} style={styles.productCard}>
+                      {p.image_url ? (
+                        <img
+                          src={p.image_url}
+                          alt={p.name}
+                          style={styles.productImage}
+                        />
+                      ) : (
+                        <div style={styles.imagePlaceholder}>No Image</div>
+                      )}
+                      <div style={{ padding: 14, minWidth: 0 }}>
+                        <b style={{ fontSize: 16 }}>{p.name}</b>
+                        <p>
+                          Category:{' '}
+                          {categories.find(
+                            (c) => String(c.id) === String(p.category_id)
+                          )?.name || '-'}
+                        </p>
+                        <p>Buy Price: {money(p.buy_price)}</p>
+                        <p>Stock: {p.stock}</p>
+                        <p>Barcode: {p.barcode || '-'}</p>
+                        {Number(p.stock) <= 0 ? (
+                          <b style={{ color: 'red' }}>Out of Stock</b>
+                        ) : Number(p.stock) <= 5 ? (
+                          <b style={{ color: '#d97706' }}>Low Stock Warning!</b>
+                        ) : null}
+                        <br />
+                        <button
+                          style={styles.gray}
+                          onClick={() => editProduct(p)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          style={styles.red}
+                          onClick={() => deleteProduct(p.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </>
+          )}
+
+          {page === 'bill' && (
+            <>
+              <h3>New Customer Bill</h3>
+              <div style={styles.box}>
+                <h3>Customer Details</h3>
+                <input
+                  style={styles.input}
+                  placeholder="Customer Name"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                />
+                <input
+                  style={styles.input}
+                  placeholder="Mobile Number"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
+                <input
+                  style={styles.input}
+                  placeholder="Address (optional)"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                />
+                <h3>Udhaar Wapsi Ki Date</h3>
+                <button style={styles.gray} onClick={() => chooseDueDate(7)}>
+                  7 Din
+                </button>
+                <button style={styles.gray} onClick={() => chooseDueDate(15)}>
+                  15 Din
+                </button>
+                <button style={styles.gray} onClick={() => chooseDueDate(30)}>
+                  30 Din
+                </button>
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                />
+                <p>
+                  Selected Due Date: {dueDate || 'Abhi date select nahi hui'}
+                </p>
+              </div>
+              <div style={styles.box}>
+                <h3>Purane Bill ka Return</h3>
+                <p>
+                  Customer ka purana bill number likh kar search karein. Return
+                  ki raqam naye bill se minus hogi.
+                </p>
+                <input
+                  style={styles.input}
+                  type="number"
+                  min="1"
+                  placeholder="Purana Bill Number"
+                  value={returnBillNumber}
+                  onChange={(e) => setReturnBillNumber(e.target.value)}
+                />
+                <button
+                  style={styles.gray}
+                  onClick={searchOldBillForReturn}
+                  disabled={loading}
+                >
+                  Purana Bill Search Karein
+                </button>
+                {returnBill && (
+                  <>
+                    <p>
+                      <b>Bill #{returnBill.id}</b> —{' '}
+                      {returnBill.customer_name || '-'} —{' '}
+                      {returnBill.phone || '-'}
+                    </p>
+                    <p>
+                      Jin items ko wapas lena hai un par checkbox lagayein aur
+                      quantity likhein:
+                    </p>
+                    {returnableItems.map((item) => {
+                      const selection = returnSelections[item.product_id] || {
+                        checked: false,
+                        quantity: '1',
+                      };
+                      return (
+                        <div key={item.product_id} style={styles.product}>
+                          <label
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              fontWeight: 'bold',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={!!selection.checked}
+                              onChange={(e) =>
+                                setReturnSelections((old) => ({
+                                  ...old,
+                                  [item.product_id]: {
+                                    ...selection,
+                                    checked: e.target.checked,
+                                  },
+                                }))
+                              }
+                            />
+                            {item.name}
+                          </label>
+                          <p>
+                            Original Qty: {item.original_quantity} | Pehle
+                            Return: {item.returned_quantity} | Ab Return ho
+                            sakti: {item.available_quantity}
+                          </p>
+                          <p>Original Rate: {money(item.price)}</p>
+                          <input
+                            style={styles.input}
+                            type="number"
+                            min="1"
+                            max={item.available_quantity}
+                            disabled={!selection.checked}
+                            value={selection.quantity}
+                            placeholder="Return Quantity"
+                            onChange={(e) =>
+                              setReturnSelections((old) => ({
+                                ...old,
+                                [item.product_id]: {
+                                  ...selection,
+                                  quantity: e.target.value,
+                                },
+                              }))
+                            }
+                          />
+                        </div>
+                      );
+                    })}
+                    <button style={styles.green} onClick={applySelectedReturns}>
+                      Selected Return Items Add Karein
+                    </button>
+                  </>
+                )}
+                {returnItems.map((item, index) => (
+                  <p key={`${item.old_order_id}-${item.product_id}`}>
+                    {item.name}: {item.quantity} x {money(item.price)} ={' '}
+                    {money(item.quantity * item.price)}{' '}
+                    <button
+                      style={styles.red}
+                      onClick={() =>
+                        setReturnItems((old) =>
+                          old.filter((_, i) => i !== index)
+                        )
+                      }
+                    >
+                      Remove Return
+                    </button>
+                  </p>
+                ))}
+                <b>Total Return: {money(returnTotal)}</b>
+                {extraRefund > 0 && (
+                  <>
+                    <h4>Extra Return Amount: {money(extraRefund)}</h4>
+                    <p>Extra paisay ka tareeqa select karein:</p>
+                    <select
+                      style={styles.input}
+                      value={returnMethod}
+                      onChange={(e) => setReturnMethod(e.target.value)}
+                    >
+                      <option value="cash">Cash Wapas Dein</option>
+                      <option value="credit">
+                        Customer ke Udhar/Account Mein Jama Karein
+                      </option>
+                    </select>
+                  </>
+                )}
+              </div>
+              <div style={styles.box}>
+                <h3>Add Product to Bill</h3>
+                <input
+                  style={styles.input}
+                  placeholder="Barcode scan karein ya number likhein"
+                  value={barcodeSearch}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setBarcodeSearch(value);
+                    const found = products.find(
+                      (p) => String(p.barcode || '') === value.trim()
+                    );
+                    if (found) addScannedOrSelectedProduct(found);
+                  }}
+                />
+                <button
+                  style={styles.gray}
+                  onClick={() => setScannerOpen((v) => !v)}
+                >
+                  {scannerOpen ? 'Scanner Band Karein' : 'Open Barcode Scanner'}
+                </button>
+                {scannerOpen && (
+                  <div
+                    id="barcode-reader"
+                    style={{ width: '100%', marginTop: 10 }}
+                  />
+                )}
+                <h4>Products Select Karein (Tick Lagayein)</h4>
+                <input
+                  style={styles.input}
+                  placeholder="Product name search karein..."
+                  value={billProductSearch}
+                  onChange={(e) => setBillProductSearch(e.target.value)}
+                />
+                <div
+                  style={{
+                    maxHeight: 300,
+                    overflowY: 'auto',
+                    border: '1px solid #dbe3ec',
+                    borderRadius: 8,
+                    padding: 8,
+                    marginBottom: 12,
+                  }}
+                >
+                  {products
+                    .filter((p) =>
+                      p.name
+                        .toLowerCase()
+                        .includes(billProductSearch.trim().toLowerCase())
+                    )
+                    .map((p) => {
+                      const selection = billProductSelections[p.id] || {};
+                      const outOfStock = Number(p.stock) <= 0;
+                      return (
+                        <div
+                          key={p.id}
+                          style={{
+                            padding: '11px 6px',
+                            borderBottom: '1px solid #e5e7eb',
+                            opacity: outOfStock ? 0.5 : 1,
+                          }}
+                        >
+                          <label
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              cursor: outOfStock ? 'not-allowed' : 'pointer',
+                              fontWeight: 600,
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              disabled={outOfStock}
+                              checked={!!selection.checked}
+                              onChange={(e) =>
+                                setBillProductSelections((old) => ({
+                                  ...old,
+                                  [p.id]: {
+                                    ...(old[p.id] || {}),
+                                    checked: e.target.checked,
+                                    quantity: old[p.id]?.quantity ?? '1',
+                                    price:
+                                      old[p.id]?.price === undefined
+                                        ? String(p.price ?? '')
+                                        : old[p.id].price,
+                                  },
+                                }))
+                              }
+                            />
+                            <span style={{ flex: 1 }}>{p.name}</span>
+                            <span style={{ color: '#64748b', fontSize: 13 }}>
+                              Stock: {p.stock}
+                            </span>
+                          </label>
+                          {!!selection.checked && (
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: 10,
+                                marginTop: 9,
+                                marginLeft: 28,
+                              }}
+                            >
+                              <label
+                                style={{ flex: '1 1 120px', fontSize: 13 }}
+                              >
+                                Quantity
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max={p.stock}
+                                  step="1"
+                                  style={{
+                                    ...styles.input,
+                                    marginTop: 4,
+                                    marginBottom: 0,
+                                  }}
+                                  value={selection.quantity ?? '1'}
+                                  onChange={(e) =>
+                                    setBillProductSelections((old) => ({
+                                      ...old,
+                                      [p.id]: {
+                                        ...old[p.id],
+                                        quantity: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                />
+                              </label>
+                              <label
+                                style={{ flex: '1 1 150px', fontSize: 13 }}
+                              >
+                                Selling Price (PKR)
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  style={{
+                                    ...styles.input,
+                                    marginTop: 4,
+                                    marginBottom: 0,
+                                  }}
+                                  value={
+                                    selection.price ?? String(p.price ?? '')
+                                  }
+                                  onChange={(e) =>
+                                    setBillProductSelections((old) => ({
+                                      ...old,
+                                      [p.id]: {
+                                        ...old[p.id],
+                                        price: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                />
+                              </label>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  {products.filter((p) =>
+                    p.name
+                      .toLowerCase()
+                      .includes(billProductSearch.trim().toLowerCase())
+                  ).length === 0 && <p>Koi product nahi mila.</p>}
+                </div>
+                <button
+                  type="button"
+                  style={styles.green}
+                  onClick={addSelectedProductsToCart}
+                >
+                  Selected Products Bill Mein Add Karein
+                </button>
+              </div>
+              <h3>Bill Items</h3>
+              {cart.map((item, index) => (
+                <div style={styles.product} key={index}>
+                  <b>{item.name}</b>
+                  <p>Quantity: {item.quantity}</p>
+                  <p>Selling Price: {money(item.price)}</p>
+                  <p>Amount: {money(item.quantity * item.price)}</p>
+                  <button
+                    style={styles.red}
+                    onClick={() => removeCartItem(index)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <div style={styles.box}>
+                <p>Sale Subtotal: {money(salesSubtotal)}</p>
+                <p>Return Minus: - {money(returnTotal)}</p>
+                <h3>Net Bill Total: {money(payableTotal)}</h3>
+                {extraRefund > 0 && (
+                  <p>
+                    Customer ko wapas dene / account mein jama:{' '}
+                    {money(extraRefund)}
+                  </p>
+                )}
+                <label>Paid Amount (PKR)</label>
+                <input
+                  style={styles.input}
+                  type="number"
+                  min="0"
+                  value={paidAmount}
+                  onChange={(e) => setPaidAmount(e.target.value)}
+                />
+                <label>Payment Method</label>
                 <select
                   style={styles.input}
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value)}
                 >
                   <option>Cash</option>
-                  <option>Bank</option>
+                  <option>Bank Transfer</option>
                   <option>JazzCash</option>
                   <option>EasyPaisa</option>
                 </select>
+                <h3>Remaining Udhaar: {money(remaining)}</h3>
                 <button
                   style={styles.green}
-                  disabled={loading}
-                  onClick={() => saveUdharPayment(bill)}
+                  onClick={saveBill}
+                  disabled={loading || (!cart.length && !returnItems.length)}
                 >
-                  {loading ? 'Saving...' : 'Save Payment'}
-                </button>
-                <button
-                  style={styles.whatsapp}
-                  onClick={() => whatsappReminder(bill)}
-                >
-                  WhatsApp Reminder
-                </button>
-                {bill.payments.length > 0 && (
-                  <>
-                    <h4>Payment History</h4>
-                    {bill.payments.map((p) => (
-                      <p key={p.id}>
-                        {money(p.amount)} — {p.payment_method || '-'}
-                      </p>
-                    ))}
-                  </>
-                )}
-              </div>
-            ))
-          )}
-          <p>{message}</p>
-        </>
-      )}
-
-      {page === 'stock' && (
-        <>
-          <h3>Stock Management</h3>
-          <button style={styles.green} onClick={loadProducts}>
-            Refresh Stock
-          </button>
-          <p>Total Products: {products.length}</p>
-          {products.map((p) => (
-            <div key={p.id} style={styles.product}>
-              <b>{p.name}</b>
-              <p>Stock Quantity: {p.stock}</p>
-              {Number(p.stock) <= 0 ? (
-                <b style={{ color: 'red' }}>Out of Stock</b>
-              ) : Number(p.stock) <= 5 ? (
-                <b style={{ color: '#d97706' }}>Low Stock Warning!</b>
-              ) : (
-                <b style={{ color: 'green' }}>Stock Available</b>
-              )}
-            </div>
-          ))}
-          <p>{message}</p>
-        </>
-      )}
-
-      {(page === 'profits' || page === 'dailyReport') && (
-        <>
-          <h3>
-            {page === 'profits'
-              ? 'Profit Reports'
-              : 'Daily Sale and Profit Report'}
-          </h3>
-          <button
-            style={styles.green}
-            onClick={async () => {
-              await loadProfitReports();
-              await loadExpenses();
-            }}
-          >
-            Refresh Reports
-          </button>
-          <div style={styles.box}>
-            <h3>
-              Total Sales: {money(profitRows.reduce((s, r) => s + r.sale, 0))}
-            </h3>
-            <h3>
-              Purchase Cost: {money(profitRows.reduce((s, r) => s + r.cost, 0))}
-            </h3>
-            <h2 style={{ color: 'green' }}>
-              Gross Profit:{' '}
-              {money(profitRows.reduce((s, r) => s + r.profit, 0))}
-            </h2>
-            <p>Today Sale: {money(todaySales)}</p>
-            <p>Today Gross Profit: {money(todayProfit)}</p>
-            <p>Today Expenses: {money(todayExpenses)}</p>
-            <b>Today Net Profit: {money(todayProfit - todayExpenses)}</b>
-          </div>
-          <h3>
-            {page === 'dailyReport' ? 'Aaj ke Bills' : 'Bill Wise Profit'}
-          </h3>
-          {(page === 'dailyReport'
-            ? profitRows.filter((r) => r.date === getToday())
-            : profitRows
-          ).length === 0 ? (
-            <p>Is period mein sales record nahi hai.</p>
-          ) : (
-            (page === 'dailyReport'
-              ? profitRows.filter((r) => r.date === getToday())
-              : profitRows
-            ).map((row) => (
-              <div key={row.order_id} style={styles.product}>
-                <b>Bill Number: {row.order_id}</b>
-                <p>Customer: {row.customer_name || '-'}</p>
-                <p>
-                  Date:{' '}
-                  {row.created_at
-                    ? new Date(row.created_at).toLocaleString()
-                    : '-'}
-                </p>
-                <p>Sale: {money(row.sale)}</p>
-                <p>Purchase Cost: {money(row.cost)}</p>
-                <b style={{ color: 'green' }}>Profit: {money(row.profit)}</b>
-              </div>
-            ))
-          )}
-          <p>{message}</p>
-        </>
-      )}
-
-      {page === 'savedBills' && (
-        <>
-          <h3>Saved Bills</h3>
-          <button style={styles.green} onClick={loadSavedBills}>Refresh Bills</button>
-          {selectedSavedBill ? <div style={styles.box}>
-            <button style={styles.gray} onClick={() => setSelectedSavedBill(null)}>Back to Bills</button>
-            <h3>Bill #{selectedSavedBill.id}</h3><p>Customer: {selectedSavedBill.customer_name || '-'}</p><p>Mobile: {selectedSavedBill.phone || '-'}</p><p>Date: {new Date(selectedSavedBill.created_at).toLocaleString()}</p>
-            {(selectedSavedBill.items || []).map((item, i) => <p key={i}>{item.name || `Product #${item.product_id}`} — {item.quantity} x {money(item.price)} = {money(item.quantity * item.price)}</p>)}
-            <h3>Total: {money(selectedSavedBill.total)}</h3>
-          </div> : savedBills.map((bill) => <div key={bill.id} style={styles.product}><b>Bill #{bill.id}</b><p>{bill.customer_name || '-'} | {bill.phone || '-'}</p><p>{new Date(bill.created_at).toLocaleString()}</p><b>{money(bill.total)}</b><br/><button style={styles.green} onClick={async () => { const { data, error } = await supabase.from('order_items').select('*').eq('order_id', bill.id); if (error) return setMessage(error.message); const items = await Promise.all((data || []).map(async (it) => { const p = products.find((x) => String(x.id) === String(it.product_id)); return { ...it, name: p?.name || `Product #${it.product_id}` }; })); setSelectedSavedBill({ ...bill, items }); }}>View Bill</button></div>)}
-          <p>{message}</p>
-        </>
-      )}
-
-      {page === 'returnReports' && (
-        <>
-          <h3>Product Return Reports</h3>
-          <button style={styles.green} onClick={loadReturnReports}>Refresh Returns</button>
-          <select style={styles.input} value={returnPeriod} onChange={(e) => setReturnPeriod(e.target.value)}><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option><option value="year">Yearly</option><option value="all">All Records</option></select>
-          {(() => { const now = new Date(); const rows = returnRows.filter((r) => { const d = new Date(r.created_at); if (returnPeriod === 'all') return true; if (returnPeriod === 'day') return d.toDateString() === now.toDateString(); if (returnPeriod === 'week') { const start = new Date(now); start.setDate(now.getDate() - 7); return d >= start; } if (returnPeriod === 'month') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); return d.getFullYear() === now.getFullYear(); }); return <><div style={styles.box}><h3>Total Returned: {rows.reduce((s, r) => s + Number(r.quantity || 0), 0)} items</h3><h3>Return Amount: {money(rows.reduce((s, r) => s + Number(r.quantity || 0) * Number(r.price || 0), 0))}</h3></div>{rows.map((r) => <div key={r.id} style={styles.product}><b>{r.product_name}</b><p>Old Bill: #{r.order_id} | New Bill: #{r.new_bill_id || '-'}</p><p>Customer: {r.customers?.name || (r.customer_id ? `Customer #${r.customer_id}` : '-')}</p><p>Quantity: {r.quantity} | Amount: {money(Number(r.quantity) * Number(r.price))}</p><p>Date: {new Date(r.created_at).toLocaleString()}</p><p>Refund: {r.refund_method || '-'}</p></div>)}</>; })()}
-        </>
-      )}
-
-      {page === 'expenses' && (
-        <>
-          <h3>Expenses Record</h3>
-          <div style={styles.box}>
-            <input
-              style={styles.input}
-              placeholder="Expense ka naam (misal: Kiraya, Bijli)"
-              value={expenseTitle}
-              onChange={(e) => setExpenseTitle(e.target.value)}
-            />
-            <input
-              style={styles.input}
-              type="number"
-              min="0"
-              placeholder="Amount (PKR)"
-              value={expenseAmount}
-              onChange={(e) => setExpenseAmount(e.target.value)}
-            />
-            <select
-              style={styles.input}
-              value={expenseCategory}
-              onChange={(e) => setExpenseCategory(e.target.value)}
-            >
-              <option>General</option>
-              <option>Rent</option>
-              <option>Electricity</option>
-              <option>Transport</option>
-              <option>Salary</option>
-              <option>Repair</option>
-              <option>Other</option>
-            </select>
-            <input
-              style={styles.input}
-              type="date"
-              value={expenseDate}
-              onChange={(e) => setExpenseDate(e.target.value)}
-            />
-            <textarea
-              style={styles.input}
-              placeholder="Note (optional)"
-              value={expenseNote}
-              onChange={(e) => setExpenseNote(e.target.value)}
-            />
-            <button
-              style={styles.green}
-              disabled={loading}
-              onClick={saveExpense}
-            >
-              {loading ? 'Saving...' : 'Save Expense'}
-            </button>
-          </div>
-          <h3>Expense History</h3>
-          <button style={styles.gray} onClick={loadExpenses}>
-            Refresh Expenses
-          </button>
-          <h3>
-            Total Expenses:{' '}
-            {money(expenses.reduce((s, e) => s + Number(e.amount || 0), 0))}
-          </h3>
-          {expenses.length === 0 ? (
-            <p>Abhi koi expense record nahi hai.</p>
-          ) : (
-            expenses.map((e) => (
-              <div key={e.id} style={styles.product}>
-                <b>{e.title}</b>
-                <p>Amount: {money(e.amount)}</p>
-                <p>Category: {e.category || '-'}</p>
-                <p>Date: {e.expense_date || '-'}</p>
-                <p>Note: {e.note || '-'}</p>
-                <button style={styles.red} onClick={() => deleteExpense(e.id)}>
-                  Delete
+                  {loading ? 'Saving Bill...' : 'Save Bill & Download PDF'}
                 </button>
               </div>
-            ))
+              <p>{message}</p>
+            </>
           )}
-          <p>{message}</p>
-        </>
-      )}
-
-      {page === 'itemRequests' && (
-        <>
-          <h3>New Item Demand</h3>
-          <div style={styles.box}>
-            <input
-              style={styles.input}
-              placeholder="Item ka naam likhein"
-              value={itemName}
-              onChange={(e) => setItemName(e.target.value)}
-            />
-            <button
-              style={styles.green}
-              onClick={saveItemRequest}
-              disabled={loading}
-            >
-              {loading ? 'Saving...' : 'Save Item'}
-            </button>
-            <p>{message}</p>
-          </div>
-          <h3>Requested Items</h3>
-          {!itemRequests.length ? (
-            <p>Abhi koi new item request nahi hai.</p>
-          ) : (
-            itemRequests.map((item) => (
-              <div key={item.id} style={styles.product}>
-                <b>{item.item_name}</b>
-                <button
-                  style={styles.red}
-                  onClick={() => deleteItemRequest(item.id)}
-                >
-                  Delete
-                </button>
-              </div>
-            ))
-          )}
-        </>
-      )}
-
-      {page === 'products' && (
-        <>
-          <h3>Products Management</h3>
-          <div style={styles.statsGrid}>
-            <div style={styles.statCard}><span>Total Products</span><strong>{products.length}</strong></div>
-            <div style={styles.statCard}><span>Total Stock Value</span><strong>{money(products.reduce((sum, p) => sum + Number(p.stock || 0) * Number(p.buy_price || 0), 0))}</strong></div>
-            <div style={styles.statCard}><span>Best Selling Item</span><strong>{topSelling[0]?.name || 'Abhi sale nahi'}</strong></div>
-            <div style={styles.statCard}><span>Low Stock Items</span><strong>{lowStockProducts.length}</strong></div>
-          </div>
-          <div style={styles.box}>
-            <div style={styles.sectionHeading}><h3 style={{margin:0}}>Top Selling Products</h3><button style={styles.gray} onClick={loadTopSelling}>Refresh</button></div>
-            {topSelling.length ? topSelling.map((item) => <p key={item.product_id}><b>{item.name}</b> — {item.quantity} sold</p>) : <p>Abhi sales record mojood nahi.</p>}
-          </div>
-          <div style={styles.box}>
-            <h3>{editingId ? 'Edit Product' : 'Add New Product'}</h3>
-            <input
-              style={styles.input}
-              placeholder="Product Name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <input
-              style={styles.input}
-              type="number"
-              placeholder="Buy Price (PKR)"
-              value={buyPrice}
-              onChange={(e) => setBuyPrice(e.target.value)}
-            />
-            <input
-              style={styles.input}
-              type="number"
-              placeholder="Stock Quantity"
-              value={stock}
-              onChange={(e) => setStock(e.target.value)}
-            />
-            <input
-              style={styles.input}
-              placeholder="Barcode Number (optional)"
-              value={barcode}
-              onChange={(e) => setBarcode(e.target.value)}
-            />
-            <select
-              style={styles.input}
-              value={categoryId}
-              onChange={(e) => setCategoryId(e.target.value)}
-            >
-              <option value="">Select Category</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <input
-              style={styles.input}
-              placeholder="Description (optional)"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-            <label style={styles.uploadLabel}>Product Picture (Camera / Gallery)
-              <input style={{...styles.input, marginBottom: 4}} type="file" accept="image/*" capture="environment" onChange={(e) => setProductImage(e.target.files?.[0] || null)} />
-              {productImage && <small>{productImage.name}</small>}
-            </label>
-            <button
-              style={styles.green}
-              onClick={saveProduct}
-              disabled={loading}
-            >
-              {loading
-                ? 'Saving...'
-                : editingId
-                ? 'Update Product'
-                : 'Save Product'}
-            </button>
-            {editingId && (
-              <button style={styles.gray} onClick={clearForm}>
-                Cancel Edit
-              </button>
-            )}
-            <p>{message}</p>
-          </div>
-          <div style={styles.sectionHeading}><h3 style={{margin:0}}>All Products</h3><span>{products.length} items</span></div>
-          <input style={styles.input} placeholder="Search product name / barcode..." value={productSearch} onChange={(e) => setProductSearch(e.target.value)} />
-          <select style={styles.input} value={productCategoryFilter} onChange={(e) => setProductCategoryFilter(e.target.value)}><option value="all">All Categories</option>{categories.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}</select>
-          {!products.length && <p>Abhi koi product nahi hai.</p>}
-          <div style={styles.productGrid}>
-          {products.filter(p => (p.name || '').toLowerCase().includes(productSearch.toLowerCase()) || String(p.barcode || '').includes(productSearch)).filter(p => productCategoryFilter === 'all' || String(p.category_id) === productCategoryFilter).map((p) => (
-            <div key={p.id} style={styles.productCard}>
-              {p.image_url ? <img src={p.image_url} alt={p.name} style={styles.productImage} /> : <div style={styles.imagePlaceholder}>No Image</div>}
-              <div style={{padding:14, minWidth:0}}>
-              <b style={{fontSize:16}}>{p.name}</b>
-              <p>
-                Category:{' '}
-                {categories.find((c) => String(c.id) === String(p.category_id))
-                  ?.name || '-'}
-              </p>
-              <p>Buy Price: {money(p.buy_price)}</p>
-              <p>Stock: {p.stock}</p>
-              <p>Barcode: {p.barcode || '-'}</p>
-              {Number(p.stock) <= 0 ? (
-                <b style={{ color: 'red' }}>Out of Stock</b>
-              ) : Number(p.stock) <= 5 ? (
-                <b style={{ color: '#d97706' }}>Low Stock Warning!</b>
-              ) : null}
-              <br />
-              <button style={styles.gray} onClick={() => editProduct(p)}>
-                Edit
-              </button>
-              <button style={styles.red} onClick={() => deleteProduct(p.id)}>
-                Delete
-              </button>
-              </div>
-            </div>
-          ))}
-          </div>
-        </>
-      )}
-
-      {page === 'bill' && (
-        <>
-          <h3>New Customer Bill</h3>
-          <div style={styles.box}>
-            <h3>Customer Details</h3>
-            <input
-              style={styles.input}
-              placeholder="Customer Name"
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-            />
-            <input
-              style={styles.input}
-              placeholder="Mobile Number"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-            <input
-              style={styles.input}
-              placeholder="Address (optional)"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-            />
-            <h3>Udhaar Wapsi Ki Date</h3>
-            <button style={styles.gray} onClick={() => chooseDueDate(7)}>
-              7 Din
-            </button>
-            <button style={styles.gray} onClick={() => chooseDueDate(15)}>
-              15 Din
-            </button>
-            <button style={styles.gray} onClick={() => chooseDueDate(30)}>
-              30 Din
-            </button>
-            <input
-              style={styles.input}
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-            />
-            <p>Selected Due Date: {dueDate || 'Abhi date select nahi hui'}</p>
-          </div>
-          <div style={styles.box}>
-            <h3>Purane Bill ka Return</h3>
-            <p>Customer ka purana bill number likh kar search karein. Return ki raqam naye bill se minus hogi.</p>
-            <input style={styles.input} type="number" min="1" placeholder="Purana Bill Number" value={returnBillNumber} onChange={(e) => setReturnBillNumber(e.target.value)} />
-            <button style={styles.gray} onClick={searchOldBillForReturn} disabled={loading}>Purana Bill Search Karein</button>
-            {returnBill && <>
-              <p><b>Bill #{returnBill.id}</b> — {returnBill.customer_name || '-'} — {returnBill.phone || '-'}</p>
-              <p>Jin items ko wapas lena hai un par checkbox lagayein aur quantity likhein:</p>
-              {returnableItems.map((item) => {
-                const selection = returnSelections[item.product_id] || { checked: false, quantity: '1' };
-                return <div key={item.product_id} style={styles.product}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 'bold' }}>
-                    <input type="checkbox" checked={!!selection.checked} onChange={(e) => setReturnSelections((old) => ({ ...old, [item.product_id]: { ...selection, checked: e.target.checked } }))} />
-                    {item.name}
-                  </label>
-                  <p>Original Qty: {item.original_quantity} | Pehle Return: {item.returned_quantity} | Ab Return ho sakti: {item.available_quantity}</p>
-                  <p>Original Rate: {money(item.price)}</p>
-                  <input style={styles.input} type="number" min="1" max={item.available_quantity} disabled={!selection.checked} value={selection.quantity} placeholder="Return Quantity" onChange={(e) => setReturnSelections((old) => ({ ...old, [item.product_id]: { ...selection, quantity: e.target.value } }))} />
-                </div>;
-              })}
-              <button style={styles.green} onClick={applySelectedReturns}>Selected Return Items Add Karein</button>
-            </>}
-            {returnItems.map((item, index) => <p key={`${item.old_order_id}-${item.product_id}`}>{item.name}: {item.quantity} x {money(item.price)} = {money(item.quantity * item.price)} <button style={styles.red} onClick={() => setReturnItems((old) => old.filter((_, i) => i !== index))}>Remove Return</button></p>)}
-            <b>Total Return: {money(returnTotal)}</b>
-            {extraRefund > 0 && <><h4>Extra Return Amount: {money(extraRefund)}</h4><p>Extra paisay ka tareeqa select karein:</p><select style={styles.input} value={returnMethod} onChange={(e) => setReturnMethod(e.target.value)}><option value="cash">Cash Wapas Dein</option><option value="credit">Customer ke Udhar/Account Mein Jama Karein</option></select></>}
-          </div>
-          <div style={styles.box}>
-            <h3>Add Product to Bill</h3>
-            <input
-              style={styles.input}
-              placeholder="Barcode scan karein ya number likhein"
-              value={barcodeSearch}
-              onChange={(e) => {
-                const value = e.target.value;
-                setBarcodeSearch(value);
-                const found = products.find(
-                  (p) => String(p.barcode || '') === value.trim()
-                );
-                if (found) addScannedOrSelectedProduct(found);
-              }}
-            />
-            <button
-              style={styles.gray}
-              onClick={() => setScannerOpen((v) => !v)}
-            >
-              {scannerOpen ? 'Scanner Band Karein' : 'Open Barcode Scanner'}
-            </button>
-            {scannerOpen && (
-              <div
-                id="barcode-reader"
-                style={{ width: '100%', marginTop: 10 }}
-              />
-            )}
-            <select
-              style={styles.input}
-              value={selectedProduct}
-              onChange={(e) => {
-                const p = products.find((x) => String(x.id) === e.target.value);
-                setSelectedProduct(e.target.value);
-                if (p) setSellingPrice(String(p.price || ''));
-              }}
-            >
-              <option value="">Select Product</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id} disabled={Number(p.stock) <= 0}>
-                  {p.name} — Stock: {p.stock}
-                </option>
-              ))}
-            </select>
-            <input
-              style={styles.input}
-              type="number"
-              min="1"
-              placeholder="Quantity"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-            />
-            <input
-              style={styles.input}
-              type="number"
-              min="0"
-              placeholder="Selling Price per item (PKR)"
-              value={sellingPrice}
-              onChange={(e) => setSellingPrice(e.target.value)}
-            />
-            <button style={styles.green} onClick={addToCart}>
-              Add to Bill
-            </button>
-            <hr style={{ margin: '18px 0', border: 0, borderTop: '1px solid #dbe3ec' }} />
-            <h4>Multiple Products Ek Saath Select Karein</h4>
-            <input style={styles.input} placeholder="Product name search karein..." value={billProductSearch} onChange={(e) => setBillProductSearch(e.target.value)} />
-            <div style={{ maxHeight: 360, overflowY: 'auto', border: '1px solid #dbe3ec', borderRadius: 8, padding: 8 }}>
-              {products.filter((p) => Number(p.stock) > 0 && p.name.toLowerCase().includes(billProductSearch.trim().toLowerCase())).map((p) => {
-                const selection = billProductSelections[p.id] || { checked: false, quantity: '1', price: String(p.price || '') };
-                return <div key={p.id} style={{ padding: '10px 4px', borderBottom: '1px solid #e5e7eb' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontWeight: 600 }}>
-                    <input type="checkbox" checked={!!selection.checked} onChange={(e) => setBillProductSelections((old) => ({ ...old, [p.id]: { ...selection, checked: e.target.checked } }))} />
-                    <span>{p.name} — Stock: {p.stock}</span>
-                  </label>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 7 }}>
-                    <input style={styles.input} type="number" min="1" max={p.stock} disabled={!selection.checked} placeholder="Quantity" value={selection.quantity} onChange={(e) => setBillProductSelections((old) => ({ ...old, [p.id]: { ...selection, quantity: e.target.value } }))} />
-                    <input style={styles.input} type="number" min="0" disabled={!selection.checked} placeholder="Selling Price" value={selection.price} onChange={(e) => setBillProductSelections((old) => ({ ...old, [p.id]: { ...selection, price: e.target.value } }))} />
-                  </div>
-                </div>;
-              })}
-              {products.filter((p) => Number(p.stock) > 0 && p.name.toLowerCase().includes(billProductSearch.trim().toLowerCase())).length === 0 && <p>Koi available product nahi mila.</p>}
-            </div>
-            <button style={styles.green} onClick={addSelectedProductsToCart}>Selected Products Bill Mein Add Karein</button>
-          </div>
-          <h3>Bill Items</h3>
-          {cart.map((item, index) => (
-            <div style={styles.product} key={index}>
-              <b>{item.name}</b>
-              <p>Quantity: {item.quantity}</p>
-              <p>Selling Price: {money(item.price)}</p>
-              <p>Amount: {money(item.quantity * item.price)}</p>
-              <button style={styles.red} onClick={() => removeCartItem(index)}>
-                Remove
-              </button>
-            </div>
-          ))}
-          <div style={styles.box}>
-            <p>Sale Subtotal: {money(salesSubtotal)}</p>
-            <p>Return Minus: - {money(returnTotal)}</p>
-            <h3>Net Bill Total: {money(payableTotal)}</h3>
-            {extraRefund > 0 && <p>Customer ko wapas dene / account mein jama: {money(extraRefund)}</p>}
-            <label>Paid Amount (PKR)</label>
-            <input
-              style={styles.input}
-              type="number"
-              min="0"
-              value={paidAmount}
-              onChange={(e) => setPaidAmount(e.target.value)}
-            />
-            <label>Payment Method</label>
-            <select
-              style={styles.input}
-              value={paymentMethod}
-              onChange={(e) => setPaymentMethod(e.target.value)}
-            >
-              <option>Cash</option>
-              <option>Bank</option>
-              <option>JazzCash</option>
-              <option>EasyPaisa</option>
-            </select>
-            <h3>Remaining Udhaar: {money(remaining)}</h3>
-            <button
-              style={styles.green}
-              onClick={saveBill}
-              disabled={loading || !cart.length}
-            >
-              {loading ? 'Saving Bill...' : 'Save Bill & Download PDF'}
-            </button>
-          </div>
-          <p>{message}</p>
-        </>
-      )}
-
         </main>
       </div>
     </div>
@@ -2179,22 +3835,139 @@ const downloadBillPdf = (bill, items, paid, due, returns = []) => {
 }
 
 const styles = {
-  appShell: { minHeight: '100vh', background: '#f3f6fb', color: '#172b4d', fontFamily: 'Inter, Arial, sans-serif' },
-  topHeader: { background: 'linear-gradient(120deg,#102b52,#174b83)', color: 'white', padding: '20px 26px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 15, boxShadow: '0 4px 16px rgba(15,35,65,.16)' },
-  headerLogout: { background: '#ffffff', color: '#15365e', border: 0, borderRadius: 9, padding: '10px 16px', fontWeight: 700, cursor: 'pointer' },
-  appLayout: { display: 'grid', gridTemplateColumns: '230px minmax(0,1fr)', gap: 22, maxWidth: 1500, margin: '0 auto', padding: 22 },
-  sidebar: { background: '#102b52', borderRadius: 16, padding: 14, display: 'flex', flexDirection: 'column', gap: 7, alignSelf: 'start', position: 'sticky', top: 16 },
-  sidebarCaption: { color: '#93b4da', fontSize: 10, fontWeight: 800, letterSpacing: 1.4, padding: '13px 10px 5px' },
-  navButton: { display: 'block', width: '100%', textAlign: 'left', color: '#e5efff', background: 'transparent', border: 0, borderRadius: 9, padding: '11px 12px', cursor: 'pointer', fontSize: 14, textDecoration: 'none' },
-  navActive: { display: 'block', width: '100%', textAlign: 'left', color: '#102b52', background: '#ffffff', border: 0, borderRadius: 9, padding: '11px 12px', cursor: 'pointer', fontWeight: 800, fontSize: 14 },
-  mainContent: { minWidth: 0, background: '#ffffff', borderRadius: 16, padding: 22, boxShadow: '0 4px 22px rgba(15,35,65,.06)' },
-  statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))', gap: 13, margin: '15px 0 22px' },
-  statCard: { background: '#f1f6ff', border: '1px solid #dce8f8', borderRadius: 13, padding: 17, display: 'flex', flexDirection: 'column', gap: 8 },
-  sectionHeading: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '22px 0 12px', color: '#15365e' },
-  productGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(235px,1fr))', gap: 15 },
-  productCard: { border: '1px solid #e1e9f4', borderRadius: 14, overflow: 'hidden', background: '#fff', boxShadow: '0 3px 12px rgba(20,45,80,.05)' },
-  productImage: { width: '100%', height: 155, objectFit: 'cover', display: 'block', background: '#f3f6fb' },
-  imagePlaceholder: { height: 155, display: 'grid', placeItems: 'center', color: '#8294aa', background: '#edf2f8', fontWeight: 700 },
+  appShell: {
+    minHeight: '100vh',
+    background: '#f3f6fb',
+    color: '#172b4d',
+    fontFamily: 'Inter, Arial, sans-serif',
+  },
+  topHeader: {
+    background: 'linear-gradient(120deg,#102b52,#174b83)',
+    color: 'white',
+    padding: '20px 26px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 15,
+    boxShadow: '0 4px 16px rgba(15,35,65,.16)',
+  },
+  headerLogout: {
+    background: '#ffffff',
+    color: '#15365e',
+    border: 0,
+    borderRadius: 9,
+    padding: '10px 16px',
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
+  appLayout: {
+    display: 'grid',
+    gridTemplateColumns: '230px minmax(0,1fr)',
+    gap: 22,
+    maxWidth: 1500,
+    margin: '0 auto',
+    padding: 22,
+  },
+  sidebar: {
+    background: '#102b52',
+    borderRadius: 16,
+    padding: 14,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+    alignSelf: 'start',
+    position: 'sticky',
+    top: 16,
+  },
+  sidebarCaption: {
+    color: '#93b4da',
+    fontSize: 10,
+    fontWeight: 800,
+    letterSpacing: 1.4,
+    padding: '13px 10px 5px',
+  },
+  navButton: {
+    display: 'block',
+    width: '100%',
+    textAlign: 'left',
+    color: '#e5efff',
+    background: 'transparent',
+    border: 0,
+    borderRadius: 9,
+    padding: '11px 12px',
+    cursor: 'pointer',
+    fontSize: 14,
+    textDecoration: 'none',
+  },
+  navActive: {
+    display: 'block',
+    width: '100%',
+    textAlign: 'left',
+    color: '#102b52',
+    background: '#ffffff',
+    border: 0,
+    borderRadius: 9,
+    padding: '11px 12px',
+    cursor: 'pointer',
+    fontWeight: 800,
+    fontSize: 14,
+  },
+  mainContent: {
+    minWidth: 0,
+    background: '#ffffff',
+    borderRadius: 16,
+    padding: 22,
+    boxShadow: '0 4px 22px rgba(15,35,65,.06)',
+  },
+  statsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))',
+    gap: 13,
+    margin: '15px 0 22px',
+  },
+  statCard: {
+    background: '#f1f6ff',
+    border: '1px solid #dce8f8',
+    borderRadius: 13,
+    padding: 17,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  sectionHeading: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    margin: '22px 0 12px',
+    color: '#15365e',
+  },
+  productGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill,minmax(235px,1fr))',
+    gap: 15,
+  },
+  productCard: {
+    border: '1px solid #e1e9f4',
+    borderRadius: 14,
+    overflow: 'hidden',
+    background: '#fff',
+    boxShadow: '0 3px 12px rgba(20,45,80,.05)',
+  },
+  productImage: {
+    width: '100%',
+    height: 155,
+    objectFit: 'cover',
+    display: 'block',
+    background: '#f3f6fb',
+  },
+  imagePlaceholder: {
+    height: 155,
+    display: 'grid',
+    placeItems: 'center',
+    color: '#8294aa',
+    background: '#edf2f8',
+    fontWeight: 700,
+  },
   center: { textAlign: 'center', padding: '30px' },
   container: {
     padding: '15px',
