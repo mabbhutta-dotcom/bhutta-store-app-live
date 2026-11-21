@@ -1406,14 +1406,7 @@ export default function App() {
   };
   const removeCartItem = (index) => setCart(cart.filter((_, i) => i !== index));
 
-  const downloadBillPdf = (
-    bill,
-    items,
-    paid,
-    due,
-    returns = [],
-    method = 'Cash'
-  ) => {
+  const downloadBillPdf = (bill, items, paid, due, returns = [], method = 'Cash') => {
     const doc = new jsPDF();
     const pageWidth = 210;
     const navy = [15, 39, 71];
@@ -1845,15 +1838,17 @@ export default function App() {
     }
 
     if (paid > 0) {
-      const { error } = await supabase.from('payments').insert([
-        {
-          customer_id: customerId,
-          order_id: order.id,
-          amount: paid,
-          payment_method: paymentMethod,
-          note: 'Bill payment',
-        },
-      ]);
+      const { error } = await supabase
+        .from('payments')
+        .insert([
+          {
+            customer_id: customerId,
+            order_id: order.id,
+            amount: paid,
+            payment_method: paymentMethod,
+            note: 'Bill payment',
+          },
+        ]);
       if (error) {
         for (const saved of insertedItems)
           await supabase.from('order_items').delete().eq('id', saved.id);
@@ -3700,55 +3695,35 @@ export default function App() {
                                 marginLeft: 28,
                               }}
                             >
-                              <label
-                                style={{ flex: '1 1 120px', fontSize: 13 }}
-                              >
+                              <label style={{ flex: '1 1 120px', fontSize: 13 }}>
                                 Quantity
                                 <input
                                   type="number"
                                   min="1"
                                   max={p.stock}
                                   step="1"
-                                  style={{
-                                    ...styles.input,
-                                    marginTop: 4,
-                                    marginBottom: 0,
-                                  }}
+                                  style={{ ...styles.input, marginTop: 4, marginBottom: 0 }}
                                   value={selection.quantity ?? '1'}
                                   onChange={(e) =>
                                     setBillProductSelections((old) => ({
                                       ...old,
-                                      [p.id]: {
-                                        ...old[p.id],
-                                        quantity: e.target.value,
-                                      },
+                                      [p.id]: { ...old[p.id], quantity: e.target.value },
                                     }))
                                   }
                                 />
                               </label>
-                              <label
-                                style={{ flex: '1 1 150px', fontSize: 13 }}
-                              >
+                              <label style={{ flex: '1 1 150px', fontSize: 13 }}>
                                 Selling Price (PKR)
                                 <input
                                   type="number"
                                   min="0"
                                   step="0.01"
-                                  style={{
-                                    ...styles.input,
-                                    marginTop: 4,
-                                    marginBottom: 0,
-                                  }}
-                                  value={
-                                    selection.price ?? String(p.price ?? '')
-                                  }
+                                  style={{ ...styles.input, marginTop: 4, marginBottom: 0 }}
+                                  value={selection.price ?? String(p.price ?? '')}
                                   onChange={(e) =>
                                     setBillProductSelections((old) => ({
                                       ...old,
-                                      [p.id]: {
-                                        ...old[p.id],
-                                        price: e.target.value,
-                                      },
+                                      [p.id]: { ...old[p.id], price: e.target.value },
                                     }))
                                   }
                                 />
