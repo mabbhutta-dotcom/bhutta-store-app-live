@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "Bhutta Shoes & Plastic Store",
+  "short_name": "Bhutta Store",
+  "description": "Bhutta Shoes & Plastic Store management app",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#071735",
+  "theme_color": "#071735",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
